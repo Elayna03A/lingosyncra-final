@@ -79,7 +79,7 @@ export default function LoginPage() {
   };
   
   return (
-    // UPDATED: Added p-4 for a safe gutter on small mobile screens
+    // Add p-4 for a safe gutter on small mobile screens
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-4">
       
       {/* UPDATED: max-w-[92%] ensures it doesn't touch screen edges on tiny phones */}
