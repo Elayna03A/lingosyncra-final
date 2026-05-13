@@ -12,7 +12,7 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [strengthScore, setStrengthScore] = useState(0);
-  const [isSignUp, setIsSignUp] = useState(false); // Toggle between Login and Sign Up
+  const [isSignUp, setIsSignUp] = useState(false); 
   const router = useRouter();
 
   const checkStrength = (pass: string) => {
@@ -33,7 +33,6 @@ export default function LoginPage() {
   };
 
   const handleAuth = async () => {
-    // 1. Validation
     if (!email || !password || (isSignUp && !age)) {
       toast.error("Invalid: Must enter credentials");
       return;
@@ -47,23 +46,20 @@ export default function LoginPage() {
     setLoading(true);
 
     if (isSignUp) {
-      // --- SIGNUP LOGIC ---
       const { data, error } = await supabase.auth.signUp({ email, password });
       if (error) {
         toast.error(error.message);
       } else if (data.user) {
         await supabase.from("profiles").upsert([{ id: data.user.id, email, age: parseInt(age) }]);
         toast.success("Account created! You can now login.");
-        setIsSignUp(false); // Automatically switch to Login mode after success
+        setIsSignUp(false); 
       }
     } else {
-      // --- LOGIN LOGIC ---
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       
       if (error) {
         toast.error("Invalid credentials");
       } else if (data.user) {
-        // Fetch role from profiles
         const { data: profile } = await supabase
           .from("profiles")
           .select("role")
@@ -83,20 +79,26 @@ export default function LoginPage() {
   };
   
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-4 md:p-6">
-      <div className="w-full max-w-sm md:max-w-md bg-slate-800/50 backdrop-blur-md p-6 md:p-8 rounded-3xl border border-slate-700 shadow-2xl">
+    // UPDATED: Added p-4 for a safe gutter on small mobile screens
+    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-4">
+      
+      {/* UPDATED: max-w-[92%] ensures it doesn't touch screen edges on tiny phones */}
+      <div className="w-full max-w-[92%] sm:max-w-md bg-slate-800/50 backdrop-blur-md p-6 sm:p-8 rounded-3xl border border-slate-700 shadow-2xl">
         
-        <h2 className="text-3xl font-bold mb-2 text-center text-transparent bg-clip-text bg-linear-to-r from-blue-400 to-emerald-400">
+        {/* UPDATED: text-2xl for mobile, sm:text-3xl for desktop */}
+        <h2 className="text-2xl sm:text-3xl font-bold mb-2 text-center text-transparent bg-clip-text bg-linear-to-r from-blue-400 to-emerald-400">
           LingoSyncra
         </h2>
-        <p className="text-slate-400 text-center mb-8 text-sm">Secure Distributed Messaging</p>
+        <p className="text-slate-400 text-center mb-8 text-xs sm:text-sm uppercase tracking-widest font-medium">
+          Secure Distributed Messaging
+        </p>
         
         <div className="space-y-5">
           {password.length > 0 && (
             <div className="space-y-2 mb-4 animate-in fade-in duration-500">
               <div className="flex justify-between items-end">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Security Strength</span>
-                <span className={`text-[11px] font-bold ${strengthScore > 2 ? 'text-emerald-400' : 'text-yellow-500'}`}>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Security Strength</span>
+                <span className={`text-[10px] font-bold ${strengthScore > 2 ? 'text-emerald-400' : 'text-yellow-500'}`}>
                   {strengthScore < 3 ? "Weak" : "Strong"}
                 </span>
               </div>
@@ -118,7 +120,7 @@ export default function LoginPage() {
           <input
             type="email"
             placeholder="Email Address"
-            className="w-full p-3.5 rounded-xl bg-slate-900/50 border border-slate-700 focus:border-blue-500 outline-none transition-all"
+            className="w-full p-3.5 rounded-xl bg-slate-900/50 border border-slate-700 focus:border-blue-500 outline-none transition-all text-sm"
             onChange={(e) => setEmail(e.target.value)}
           />
 
@@ -127,52 +129,50 @@ export default function LoginPage() {
               type={showPassword ? "text" : "password"}
               value={password}
               placeholder="Password"
-              className="w-full p-3.5 rounded-xl bg-slate-900/50 border border-slate-700 focus:border-blue-500 outline-none"
+              className="w-full p-3.5 rounded-xl bg-slate-900/50 border border-slate-700 focus:border-blue-500 outline-none text-sm"
               onChange={(e) => {
                 setPassword(e.target.value);
                 checkStrength(e.target.value);
               }}
             />
             <div className="absolute right-3 top-3.5 flex gap-2 text-slate-400">
-              <button onClick={() => setShowPassword(!showPassword)} type="button">
-                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+              <button onClick={() => setShowPassword(!showPassword)} type="button" className="hover:text-white transition-colors">
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
               <button onClick={generatePassword} type="button" className="hover:text-emerald-400 transition-colors">
-                <RefreshCw size={20} />
+                <RefreshCw size={18} />
               </button>
             </div>
           </div>
 
-          {/* AGE FIELD: Only shown if isSignUp is true */}
           {isSignUp && (
             <div className="relative animate-in slide-in-from-top-2 duration-300">
               <input
                 type="number"
                 placeholder="Age (Min. 16)"
-                className={`w-full p-3.5 rounded-xl bg-slate-900/50 border outline-none transition-all ${parseInt(age) < 16 && age !== "" ? 'border-red-500' : 'border-slate-700'}`}
+                className={`w-full p-3.5 rounded-xl bg-slate-900/50 border outline-none transition-all text-sm ${parseInt(age) < 16 && age !== "" ? 'border-red-500' : 'border-slate-700'}`}
                 onChange={(e) => setAge(e.target.value)}
               />
               {parseInt(age) < 16 && age !== "" && (
-                <span className="text-red-400 text-xs mt-1 block px-1 animate-pulse">Must be 16 or older</span>
+                <span className="text-red-400 text-[10px] mt-1 block px-1 animate-pulse">Must be 16 or older</span>
               )}
             </div>
           )}
           
-          <div className="flex flex-col gap-3 pt-4">
+          <div className="flex flex-col gap-4 pt-4">
             <button 
               onClick={handleAuth}
-              className={`w-full p-3.5 rounded-xl font-bold transition-all shadow-lg ${isSignUp ? 'bg-linear-to-r from-blue-600 to-blue-500' : 'bg-linear-to-r from-emerald-600 to-emerald-500'}`}
+              className={`w-full p-4 rounded-xl font-bold transition-all shadow-lg text-sm active:scale-95 ${isSignUp ? 'bg-linear-to-r from-blue-600 to-blue-500' : 'bg-linear-to-r from-emerald-600 to-emerald-500'}`}
             >
-              {loading ? "Processing..." : (isSignUp ? "Sign Up" : "Login")}
+              {loading ? "Processing..." : (isSignUp ? "Create Account" : "Sign In")}
             </button>
 
-            {/* Toggle Link */}
             <button 
               onClick={() => setIsSignUp(!isSignUp)}
               type="button"
-              className="text-sm text-slate-400 hover:text-white transition-colors"
+              className="text-xs text-slate-400 hover:text-white transition-colors py-2"
             >
-              {isSignUp ? "Already have an account? Login" : "Don't have an account? Sign Up"}
+              {isSignUp ? "Already have an account? Sign In" : "Don't have an account? Sign Up"}
             </button>
           </div>
         </div>
