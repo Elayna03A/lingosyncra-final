@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   description: "Secure Real-time Translation Messaging",
 };
 
-// ADD THIS: Prevents mobile input zoom-in bugs
+// Prevents mobile input zoom-in bugs
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
@@ -36,7 +36,6 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      {/* UPDATED: added selection:bg-blue-500/30 for better UI feel */}
       <body className="min-h-full flex flex-col bg-slate-900 text-white selection:bg-blue-500/30">
         
         <Toaster 
