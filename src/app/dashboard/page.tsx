@@ -3,7 +3,8 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase"; 
 import { toast } from "react-hot-toast"; 
-import { Menu, X, MessageSquare, User, LogOut, Settings, Plus } from "lucide-react";
+import { Menu, X, MessageSquare, User, LogOut, Settings, Plus, ShieldCheck } from "lucide-react";
+
 
 export default function Dashboard() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
@@ -14,27 +15,36 @@ export default function Dashboard() {
   const [saveName, setSaveName] = useState(""); // State for the contact's name
   const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]); 
+  const [userRole, setUserRole] = useState("user");
 
 useEffect(() => {
-  const fetchChats = async () => {
+  const fetchDashboardData = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
+      // 1. Fetch User Role
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+      
+      if (profile) setUserRole(profile.role);
+
+      // 2. Fetch Chats (Your existing logic)
       const { data, error } = await supabase
         .from('chats') 
         .select('*')
         .or(`user_1.eq.${user.id},user_2.eq.${user.id}`);
       
       if (data) {
-        // Main list: only chats where status is 'accepted'
         setContacts(data.filter((c: any) => c.status === 'accepted'));
-        
-        // Requests list: chats where status is 'pending' AND you are the recipient (user_B )
         setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
       }
     }
   };
-  fetchChats();
+  fetchDashboardData();
 }, []);
+
 
   // Handle adding new contacts ---
  const handleAddContact = async () => {
@@ -92,6 +102,21 @@ const handleAcceptInvite = async (chatId: string) => {
   }
 };
 
+const handleDeclineInvite = async (chatId: string) => {
+  const { error } = await supabase
+    .from('chats')
+    .update({ status: 'declined' }) // We set it to declined so it stops appearing
+    .eq('id', chatId);
+
+  if (!error) {
+    toast.error("Invite Declined");
+    // Refresh the local state or reload to update the UI
+    window.location.reload(); 
+  } else {
+    toast.error("Error declining invite");
+  }
+};
+
   return (
     <div className="flex min-h-screen bg-slate-900 text-white">
 
@@ -113,7 +138,17 @@ const handleAcceptInvite = async (chatId: string) => {
   className="flex items-center gap-3 w-full p-3 hover:bg-slate-700 rounded-xl text-slate-300 transition-all"
 >
   <User size={20}/> Profile
-</button>          <button onClick={() => router.push("/login")} className="flex items-center gap-3 w-full p-3 hover:bg-red-900/30 text-red-400 rounded-xl mt-10"><LogOut size={20}/> Logout</button>
+</button>  
+    {userRole === 'admin' && (
+  <button 
+    onClick={() => router.push("/admin")} 
+    className="flex items-center gap-3 w-full p-3 hover:bg-emerald-900/30 text-emerald-400 rounded-xl border border-emerald-900/50 transition-all"
+  >
+    <ShieldCheck size={20}/> Admin Panel
+  </button>
+)}        
+<button onClick={() => router.push("/login")} className="flex items-center gap-3 w-full p-3 hover:bg-red-900/30 text-red-400 rounded-xl mt-10"><LogOut size={20}/> Logout</button>
+    
         </nav>
       </aside>
 
@@ -256,13 +291,22 @@ const handleAcceptInvite = async (chatId: string) => {
                 <p className="text-[10px] text-slate-500 uppercase tracking-tighter">Wants to connect</p>
               </div>
               <div className="flex gap-2">
-                <button 
-                  onClick={() => handleAcceptInvite(request.id)}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold transition-all"
-                >
-                  Accept
-                </button>
-              </div>
+  {/* Accept Button */}
+  <button 
+    onClick={() => handleAcceptInvite(request.id)}
+    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold transition-all"
+  >
+    Accept
+  </button>
+
+  {/* Decline Button */}
+  <button 
+    onClick={() => handleDeclineInvite(request.id)}
+    className="px-4 py-2 bg-slate-700 hover:bg-red-600 rounded-lg text-xs font-bold transition-all"
+  >
+    Decline
+  </button>
+</div>
             </div>
           ))}
         </div>

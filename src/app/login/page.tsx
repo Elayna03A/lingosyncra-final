@@ -11,7 +11,8 @@ export default function LoginPage() {
   const [age, setAge] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [strengthScore, setStrengthScore] = useState(0); // Using only one score variable
+  const [strengthScore, setStrengthScore] = useState(0);
+  const [isSignUp, setIsSignUp] = useState(false); // Toggle between Login and Sign Up
   const router = useRouter();
 
   const checkStrength = (pass: string) => {
@@ -28,46 +29,58 @@ export default function LoginPage() {
     let newPass = "";
     for (let i = 0; i < 12; i++) newPass += chars.charAt(Math.floor(Math.random() * chars.length));
     setPassword(newPass);
-    checkStrength(newPass); // Updating the strength when generating a password
+    checkStrength(newPass);
   };
 
-  const handleAuth = async (type: "login" | "signup") => {
-  // 1. Check for empty fields first
-  if (!email || !password || (type === "signup" && !age)) {
-    toast.error("Invalid: Must enter credentials");
-    return;
-  }
-
-  // 2. Age check (For both Login and Signup)
-  if (parseInt(age) < 16) {
-    toast.error("Invalid: User must be 16 plus");
-    return;
-  }
-
-  setLoading(true);
-
-  if (type === "signup") {
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) {
-      toast.error(error.message);
-    } else if (data.user) {
-      await supabase.from("profiles").insert([{ id: data.user.id, email, age: parseInt(age) }]);
-      toast.success("Account created! Check your email.");
+  const handleAuth = async () => {
+    // 1. Validation
+    if (!email || !password || (isSignUp && !age)) {
+      toast.error("Invalid: Must enter credentials");
+      return;
     }
-  } else {
-    // LOGIN LOGIC
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    
-    if (error) {
-      // Standardize error message for security
-      toast.error("Invalid credentials");
+
+    if (isSignUp && parseInt(age) < 16) {
+      toast.error("Invalid: User must be 16 plus");
+      return;
+    }
+
+    setLoading(true);
+
+    if (isSignUp) {
+      // --- SIGNUP LOGIC ---
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) {
+        toast.error(error.message);
+      } else if (data.user) {
+        await supabase.from("profiles").upsert([{ id: data.user.id, email, age: parseInt(age) }]);
+        toast.success("Account created! You can now login.");
+        setIsSignUp(false); // Automatically switch to Login mode after success
+      }
     } else {
-      toast.success("Welcome back!");
-      router.push("/dashboard");
+      // --- LOGIN LOGIC ---
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      
+      if (error) {
+        toast.error("Invalid credentials");
+      } else if (data.user) {
+        // Fetch role from profiles
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", data.user.id)
+          .single();
+
+        if (profile?.role === "admin") {
+          toast.success("Welcome back, Admin!");
+          router.push("/admin");
+        } else {
+          toast.success("Welcome back!");
+          router.push("/dashboard");
+        }
+      }
     }
-  }
-  setLoading(false);
-};
+    setLoading(false);
+  };
   
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 text-white p-4 md:p-6">
@@ -79,7 +92,6 @@ export default function LoginPage() {
         <p className="text-slate-400 text-center mb-8 text-sm">Secure Distributed Messaging</p>
         
         <div className="space-y-5">
-          {/* Strength Meter at the top of the section when entering a password */}
           {password.length > 0 && (
             <div className="space-y-2 mb-4 animate-in fade-in duration-500">
               <div className="flex justify-between items-end">
@@ -131,30 +143,36 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <div className="relative">
-            <input
-              type="number"
-              placeholder="Age (Min. 16)"
-              className={`w-full p-3.5 rounded-xl bg-slate-900/50 border outline-none transition-all ${parseInt(age) < 16 && age !== "" ? 'border-red-500' : 'border-slate-700'}`}
-              onChange={(e) => setAge(e.target.value)}
-            />
-            {parseInt(age) < 16 && age !== "" && (
-              <span className="text-red-400 text-xs mt-1 block px-1 animate-pulse">Must be 16 or older</span>
-            )}
-          </div>
+          {/* AGE FIELD: Only shown if isSignUp is true */}
+          {isSignUp && (
+            <div className="relative animate-in slide-in-from-top-2 duration-300">
+              <input
+                type="number"
+                placeholder="Age (Min. 16)"
+                className={`w-full p-3.5 rounded-xl bg-slate-900/50 border outline-none transition-all ${parseInt(age) < 16 && age !== "" ? 'border-red-500' : 'border-slate-700'}`}
+                onChange={(e) => setAge(e.target.value)}
+              />
+              {parseInt(age) < 16 && age !== "" && (
+                <span className="text-red-400 text-xs mt-1 block px-1 animate-pulse">Must be 16 or older</span>
+              )}
+            </div>
+          )}
           
-          <div className="flex flex-col md:flex-row gap-3 pt-4">
+          <div className="flex flex-col gap-3 pt-4">
             <button 
-              onClick={() => handleAuth("login")}
-              className="w-full bg-linear-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 p-3.5 rounded-xl font-bold transition-all"
+              onClick={handleAuth}
+              className={`w-full p-3.5 rounded-xl font-bold transition-all shadow-lg ${isSignUp ? 'bg-linear-to-r from-blue-600 to-blue-500' : 'bg-linear-to-r from-emerald-600 to-emerald-500'}`}
             >
-              Login
+              {loading ? "Processing..." : (isSignUp ? "Sign Up" : "Login")}
             </button>
+
+            {/* Toggle Link */}
             <button 
-              onClick={() => handleAuth("signup")}
-              className="w-full bg-linear-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 p-3.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-900/20"
+              onClick={() => setIsSignUp(!isSignUp)}
+              type="button"
+              className="text-sm text-slate-400 hover:text-white transition-colors"
             >
-              {loading ? "Processing..." : "Sign Up"}
+              {isSignUp ? "Already have an account? Login" : "Don't have an account? Sign Up"}
             </button>
           </div>
         </div>
