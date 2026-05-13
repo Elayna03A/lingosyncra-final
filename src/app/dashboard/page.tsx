@@ -114,7 +114,7 @@ const handleDeclineInvite = async (chatId: string) => {
   return (
     <div className="flex min-h-screen bg-slate-900 text-white">
 
-      {/* Mobile Hamburger Menu - Positioned better for thumbs */}
+      {/* Mobile Hamburger Menu - Positioned better*/}
       <div className="lg:hidden fixed top-5 left-5 z-50">
         <button 
           onClick={() => setSidebarOpen(!isSidebarOpen)} 
@@ -124,7 +124,7 @@ const handleDeclineInvite = async (chatId: string) => {
         </button>
       </div>
 
-      {/* Sidebar - Added backdrop blur for mobile overlay */}
+      {/* Sidebar - Added backdrop blur for mobile */}
       <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800/95 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 backdrop-blur-lg lg:backdrop-blur-none`}>
         <div className="p-8">
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400">LingoSyncra</h2>

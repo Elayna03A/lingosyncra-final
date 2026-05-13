@@ -4,15 +4,17 @@ import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
 import { Users, Calendar, ArrowLeft, ShieldCheck } from "lucide-react";
 
+
 export default function AdminDashboard() {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+
   useEffect(() => {
     const checkAdminAndFetchData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      
+     
       // Security Check: If not logged in or not an admin, kick them out
       const { data: profile } = await supabase
         .from('profiles')
@@ -20,10 +22,12 @@ export default function AdminDashboard() {
         .eq('id', user?.id)
         .single();
 
+
       if (profile?.role !== 'admin') {
         router.push("/dashboard");
         return;
       }
+
 
       // Fetch User Stats
       const { data } = await supabase
@@ -31,14 +35,18 @@ export default function AdminDashboard() {
         .select('email, created_at, role')
         .order('created_at', { ascending: false });
 
+
       if (data) setUsers(data);
       setLoading(false);
     };
 
+
     checkAdminAndFetchData();
   }, [router]);
 
+
   if (loading) return <div className="p-10 text-white">Verifying Admin Credentials...</div>;
+
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-8">
@@ -55,6 +63,7 @@ export default function AdminDashboard() {
           </button>
         </header>
 
+
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
           <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700">
@@ -63,6 +72,7 @@ export default function AdminDashboard() {
             <p className="text-4xl font-bold">{users.length}</p>
           </div>
         </div>
+
 
         {/* User Table */}
         <div className="bg-slate-800 border border-slate-700 rounded-3xl overflow-hidden">
@@ -95,3 +105,4 @@ export default function AdminDashboard() {
     </div>
   );
 }
+
