@@ -128,7 +128,7 @@ const handleDeclineInvite = async (chatId: string) => {
       <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800/95 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 backdrop-blur-lg lg:backdrop-blur-none`}>
         <div className="p-8">
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400">LingoSyncra</h2>
-          <p className="text-[10px] text-slate-500 tracking-[0.2em] uppercase mt-1">v1.0 Distributed</p>
+          <p className="text-[10px] text-slate-500 tracking-[0.2em] uppercase mt-1">Your go to translation app</p>
         </div>
         
         <nav className="mt-4 space-y-2 px-6">
@@ -187,7 +187,7 @@ const handleDeclineInvite = async (chatId: string) => {
               className="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-500 p-3.5 rounded-2xl flex items-center justify-center gap-3 font-bold transition-all shadow-xl shadow-emerald-900/30 text-sm"
             >
               <Plus size={18} />
-              <span>Add</span>
+              <span>Add Contact</span>
             </button>
           </div>
         </header>
