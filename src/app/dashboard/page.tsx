@@ -36,11 +36,12 @@ useEffect(() => {
   .or(`user_1.eq.${user.id},user_2.eq.${user.id}`); 
 
 if (data) {
-  // Filter for established contacts
+  // 1. Established friends (Both sides accepted)
   setContacts(data.filter((c: any) => c.status === 'accepted'));
   
-  // Filter for invites waiting for THIS user to accept
+  // 2. Invites waiting for THIS logged-in user to accept (Incoming)
   setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
+
 }
     }
   };
