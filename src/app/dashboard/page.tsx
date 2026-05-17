@@ -30,15 +30,18 @@ useEffect(() => {
       if (profile) setUserRole(profile.role);
 
       const { data, error } = await supabase
-        .from('chats') 
-        .select('*')
-        .or(`user_1.eq.${user.user_metadata.email || user.email},user_2.eq.${user.id}`); 
-        // Note: Check your DB query logic if it matches your specific schema
+  .from('chats') 
+  .select('*')
+  // Check if current logged-in User ID is either user_1 OR user_2
+  .or(`user_1.eq.${user.id},user_2.eq.${user.id}`); 
 
-      if (data) {
-        setContacts(data.filter((c: any) => c.status === 'accepted'));
-        setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
-      }
+if (data) {
+  // Filter for established contacts
+  setContacts(data.filter((c: any) => c.status === 'accepted'));
+  
+  // Filter for invites waiting for THIS user to accept
+  setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
+}
     }
   };
   fetchDashboardData();
