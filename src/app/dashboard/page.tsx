@@ -54,7 +54,7 @@ useEffect(() => {
   const { data: targetUser, error: findError } = await supabase
     .from('profiles')
     .select('id')
-    .eq('email', searchEmail)
+    .eq('email', searchEmail.trim()) // <-- Add .trim() here
     .single();
 
   if (findError || !targetUser) {
