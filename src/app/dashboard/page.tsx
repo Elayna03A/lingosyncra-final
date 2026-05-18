@@ -15,7 +15,6 @@ export default function Dashboard() {
   const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]); 
   const [userRole, setUserRole] = useState("user");
-  // Added local state to keep track of the logged-in user profile attributes globally
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
@@ -41,7 +40,7 @@ export default function Dashboard() {
           // 1. Established friends (Both sides accepted)
           setContacts(data.filter((c: any) => c.status === 'accepted'));
           
-          // 2. Isolates requests strictly waiting for THIS user (User B) to accept
+          // 2. Isolate requests strictly waiting for THIS user (User B) to accept
           setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
         }
       }
@@ -66,10 +65,9 @@ export default function Dashboard() {
       return;
     }
 
-    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    const { data: { user: authUser } } = await supabase.auth.getUser();
 
-    // Prevent users from adding themselves
-    if (currentUser?.id === targetUser.id) {
+    if (authUser?.id === targetUser.id) {
       toast.error("You cannot add your own email");
       return;
     }
@@ -77,10 +75,10 @@ export default function Dashboard() {
     const { error: insertError } = await supabase
       .from('chats')
       .insert([{ 
-        user_1: currentUser?.id,       // Sender (User A)
-        user_2: targetUser.id,          // Receiver (User B)
-        // Store the sender's email here so the receiver can see who sent it
-        contact_name: currentUser?.email || "Someone", 
+        user_1: authUser?.id,                           // Sender (User A)
+        user_2: targetUser.id,                          // Receiver (User B)
+        user_1_name: saveName,                          // What User A wants to call User B
+        user_2_name: authUser?.email || "Someone",      // Tells User B exactly who sent the invite
         status: 'pending' 
       }]);
 
@@ -91,13 +89,21 @@ export default function Dashboard() {
       setIsAddModalOpen(false);
       setSearchEmail("");
       setSaveName("");
+      window.location.reload(); // Reload to refresh local state queries immediately
     }
   };
 
   const handleAcceptInvite = async (chatId: string) => {
+    // Locate the matching request object inside our array state
+    const originalRequest = pendingRequests.find(r => r.id === chatId);
+    const senderIdentity = originalRequest?.user_2_name || "Connected Channel";
+
     const { error } = await supabase
       .from('chats')
-      .update({ status: 'accepted' })
+      .update({ 
+        status: 'accepted',
+        user_2_name: senderIdentity // Safeguards that user_2_name holds a string for User B's grid layout
+      })
       .eq('id', chatId);
 
     if (!error) {
@@ -136,19 +142,20 @@ export default function Dashboard() {
       </div>
 
       {/* Sidebar Layout Section */}
-      <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 shadow-2xl lg:shadow-none`}>
+      <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 shadow-2xl lg:shadow-none`}>
         <div className="p-8 max-lg:pl-16 max-lg:pr-4">
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
             LingoSyncra
           </h2>
-          {/* FIX: Fixed a class typo from 'wrap-break-words' to 'break-words' so tailwind processes wrap logic appropriately */}
           <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 wrap-break-words leading-relaxed">
             Your go-to translation app
           </p>
         </div>
         
         <nav className="mt-4 space-y-2 px-6">
-          <button className="flex items-center gap-4 w-full p-4 bg-blue-600 rounded-2xl font-bold text-sm shadow-lg shadow-blue-900/20"><MessageSquare size={18}/> Chats</button>
+          <button className="flex items-center gap-4 w-full p-4 bg-blue-600 rounded-2xl font-bold text-sm shadow-lg shadow-blue-900/20">
+            <MessageSquare size={18}/> Chats
+          </button>
           
           <button 
             onClick={() => router.push("/profile")} 
@@ -219,13 +226,8 @@ export default function Dashboard() {
         ) : (
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
             {contacts.map((chat: any) => {
-              // FIX: Dynamically configure who is looking at the screen context. 
-              // Since contact_name stores User A's email value, User B sees User A's real email label.
-              // If User A views the active list item block, fallback label gracefully displays "Connected Channel"
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
-              const renderedDisplayName = isCurrentUserSender 
-                ? (chat.contact_name === currentUser?.email ? "Connected Channel" : chat.contact_name)
-                : chat.contact_name;
+              const renderedDisplayName = isCurrentUserSender ? chat.user_1_name : chat.user_2_name;
 
               return (
                 <div 
@@ -254,7 +256,7 @@ export default function Dashboard() {
 
       {/* --- ADD MODAL --- */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-100 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl overflow-hidden relative">
             <div className="absolute top-0 left-0 w-full h-2 bg-linear-to-r from-emerald-500 to-blue-500"></div>
             <h2 className="text-2xl font-black mb-8">Add New Contact</h2>
@@ -265,7 +267,7 @@ export default function Dashboard() {
                 <input 
                   type="email"
                   placeholder="name@example.com"
-                  className="w-full p-4 rounded-2xl bg-slate-900 border border-slate-700 outline-none focus:border-emerald-500 transition-all text-sm"
+                  className="w-full p-4 rounded-2xl bg-slate-900 border border-slate-700 outline-none focus:border-emerald-500 transition-all text-sm text-white"
                   value={searchEmail}
                   onChange={(e) => setSearchEmail(e.target.value)}
                 />
@@ -276,7 +278,7 @@ export default function Dashboard() {
                 <input 
                   type="text"
                   placeholder="e.g. Project Manager"
-                  className="w-full p-4 rounded-2xl bg-slate-900 border border-slate-700 outline-none focus:border-emerald-500 transition-all text-sm"
+                  className="w-full p-4 rounded-2xl bg-slate-900 border border-slate-700 outline-none focus:border-emerald-500 transition-all text-sm text-white"
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
                 />
@@ -303,7 +305,7 @@ export default function Dashboard() {
 
       {/* --- REQUESTS MODAL --- */}
       {isRequestsModalOpen && (
-        <div className="fixed inset-0 z-100 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl relative">
             <div className="absolute top-0 left-0 w-full h-2 bg-linear-to-r from-blue-500 to-emerald-500"></div>
             <div className="flex justify-between items-center mb-8">
@@ -325,12 +327,11 @@ export default function Dashboard() {
                 {pendingRequests.map((request) => (
                   <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
                     <div className="flex items-center gap-4">
-                      {/* FIX: Wrapped fallback checking with safely evaluated conditional uppercase handlers */}
                       <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-blue-400 uppercase">
-                        {request.contact_name ? request.contact_name[0] : "U"}
+                        {request.user_2_name ? request.user_2_name[0] : "U"}
                       </div>
                       <div>
-                        <p className="font-bold text-sm">{request.contact_name}</p>
+                        <p className="font-bold text-sm">{request.user_2_name || "Unknown User"}</p>
                         <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Sent You A Request</p>
                       </div>
                     </div>
