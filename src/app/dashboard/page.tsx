@@ -17,9 +17,8 @@ export default function Dashboard() {
   const [userRole, setUserRole] = useState("user");
   const [currentUser, setCurrentUser] = useState<any>(null);
 
-  // Robust function to pull chats and then look up user profiles cleanly
+  // Pulls chat rows and dynamically pairs up display profiles
   const fetchAndSetChats = async (userId: string) => {
-    // 1. Get raw rows matching the user
     const { data: chatsData, error: chatsError } = await supabase
       .from('chats')
       .select('*')
@@ -32,21 +31,20 @@ export default function Dashboard() {
 
     if (!chatsData) return;
 
-    // 2. Fetch profiles to link emails without breaking on explicit constraint names
+    // Fetch profile table records to fall back onto emails if names are missing
     const { data: profilesData } = await supabase
       .from('profiles')
       .select('id, email');
 
     const profileMap = new Map(profilesData?.map(p => [p.id, p.email]) || []);
 
-    // 3. Map profile details into chat list objects
     const mappedChats = chatsData.map((chat: any) => ({
       ...chat,
       sender_email: profileMap.get(chat.user_1) || "Unknown Sender",
       receiver_email: profileMap.get(chat.user_2) || "Unknown Receiver"
     }));
 
-    // 4. Update local state
+    // Distribute into respective state containers
     setContacts(mappedChats.filter((c: any) => c.status === 'accepted'));
     setPendingRequests(mappedChats.filter((c: any) => c.status === 'pending' && c.user_2 === userId));
   };
@@ -60,7 +58,6 @@ export default function Dashboard() {
       
       setCurrentUser(user);
       
-      // Get user role profile
       const { data: profile } = await supabase
         .from('profiles')
         .select('role')
@@ -68,10 +65,9 @@ export default function Dashboard() {
         .single();
       if (profile) setUserRole(profile.role);
 
-      // Initial data pull
       await fetchAndSetChats(user.id);
 
-      // Realtime websocket pipeline
+      // Real-time state channel pipeline
       chatChannel = supabase
         .channel('realtime-chats-dashboard')
         .on(
@@ -114,12 +110,13 @@ export default function Dashboard() {
       return;
     }
 
+    // Fixed: Using user_1_name instead of contact_name!
     const { error: insertError } = await supabase
       .from('chats')
       .insert([{ 
         user_1: currentUser?.id,
         user_2: targetUser.id,
-        contact_name: saveName, 
+        user_1_name: saveName, 
         status: 'pending' 
       }]);
 
@@ -186,7 +183,7 @@ export default function Dashboard() {
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
             LingoSyncra
           </h2>
-          <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 wrap-break-words leading-relaxed">
+          <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 bwrap-reak-words leading-relaxed">
             Your go-to translation app
           </p>
         </div>
@@ -266,10 +263,11 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
-              // Determine clean active user tracking label
+              // If you are the sender, show the custom label you set in user_1_name.
+              // If you received it, show what they named you, falling back to their registration email.
               const displayName = isCurrentUserSender 
-                ? chat.contact_name 
-                : chat.sender_email;
+                ? (chat.user_1_name || chat.receiver_email) 
+                : (chat.user_2_name || chat.sender_email);
 
               return (
                 <div 
@@ -378,7 +376,7 @@ export default function Dashboard() {
                         <div className="min-w-0 flex-1">
                           <p className="font-bold text-sm truncate">{requestSenderEmail}</p>
                           <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
-                            Wants to connect as: <span className="text-blue-400 normal-case font-medium">{request.contact_name}</span>
+                            Wants to connect as: <span className="text-blue-400 normal-case font-medium">{request.user_1_name || "New Friend"}</span>
                           </p>
                         </div>
                       </div>
