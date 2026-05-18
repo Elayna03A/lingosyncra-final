@@ -164,8 +164,7 @@ export default function Dashboard() {
       <main className="flex-1 p-5 sm:p-8 lg:p-12 pt-24 lg:pt-12 overflow-x-hidden">
         
         {/* FIX: Added 'max-sm:pl-16' so the text shifts perfectly away from the hamburger icon on mobile views */}
-        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10 max-sm:pl-16">
-          <div>
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10 pl-16 lg:pl-0">          <div>
             <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Chats</h1>
             <div className="h-1 w-12 bg-blue-500 mt-2 rounded-full"></div>
           </div>
