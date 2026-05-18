@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter, useParams } from "next/navigation"; 
-import { Send, ArrowLeft, Globe, ChevronUp, MoreVertical, Settings, Edit2, Trash2, Download, X } from "lucide-react";
+import { Send, ArrowLeft, Globe, ChevronUp, MoreVertical, Edit2, Trash2, Download, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "react-hot-toast";
 import { translateText } from "@/lib/gemini";
@@ -11,24 +11,43 @@ export default function ChatPage() {
   const params = useParams(); 
   const [contactName, setContactName] = useState("Loading...");
   const [message, setMessage] = useState("");
-  const [messages, setMessages] = useState<any[]>([]); // New state for chat bubbles
+  const [messages, setMessages] = useState<any[]>([]); 
   const [targetLanguage, setTargetLanguage] = useState("English");
   const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(contactName);
+  const [editName, setEditName] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [chatMeta, setChatMeta] = useState<any>(null);
 
-  // 1. Initial Data Fetch (Contact Name & Existing Messages)
+  // 1. Initial Data Fetch (Identify Profile, Set Custom Nicknames & Load Past History)
   useEffect(() => {
     const fetchChatData = async () => {
-      // Fetch Contact Name
-      const { data: contact } = await supabase
+      // Get the active session user identity first
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        setCurrentUserId(user.id);
+      }
+
+      // Fetch Chat metadata using the updated columns
+      const { data: chatRow } = await supabase
         .from('chats')
-        .select('contact_name')
+        .select('*')
         .eq('id', params.id)
         .single();
-      if (contact) setContactName(contact.contact_name);
+      
+      if (chatRow && user) {
+        setChatMeta(chatRow);
+        // Fallback checks mirroring your dashboard layout
+        const isCurrentUserSender = chatRow.user_1 === user.id;
+        const activeName = isCurrentUserSender 
+          ? (chatRow.user_1_name || "Chat Partner") 
+          : (chatRow.user_2_name || "Chat Partner");
+        
+        setContactName(activeName);
+        setEditName(activeName);
+      }
 
       // Fetch Message History
       const { data: history } = await supabase
@@ -39,20 +58,18 @@ export default function ChatPage() {
       if (history) setMessages(history);
     };
 
-    fetchChatData();
+    if (params.id) fetchChatData();
   }, [params.id]);
 
-  // 2. REAL-TIME TCP/WEBSOCKET LISTENER
+  // 2. REAL-TIME EVENT STREAM LISTENER
   useEffect(() => {
-    // This creates a persistent channel over TCP
     const channel = supabase
       .channel(`chat-${params.id}`)
       .on(
         'postgres_changes', 
         { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.id}` }, 
         (payload) => {
-          // Logic to update chat UI instantly when a new row is detected
-          console.log('New message received via TCP/WebSocket:', payload);
+          console.log('New message received via WebSocket:', payload);
           setMessages((prev) => [...prev, payload.new]);
         }
       )
@@ -70,18 +87,15 @@ export default function ChatPage() {
   ];
 
   const handleSendMessage = async () => {
-    if (!message.trim()) return;
+    if (!message.trim() || !currentUserId) return;
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
       const translated = await translateText(message, targetLanguage);
 
       const { error } = await supabase.from("messages").insert([
         {
           chat_id: params.id,
-          sender_id: user.id,
+          sender_id: currentUserId,
           content: message,
           translated_content: translated,
         },
@@ -96,23 +110,53 @@ export default function ChatPage() {
     }
   };
 
-  // ... (Keep your existing Edit/Delete/XML functions here) ...
-  const handleEdit = () => { setEditName(contactName); setIsEditing(true); setIsSettingsOpen(false); };
-  const saveNewName = async () => {
-    if (!editName) return;
-    const { error } = await supabase.from('chats').update({ contact_name: editName }).eq('id', params.id);
-    if (!error) { setContactName(editName); setIsEditing(false); toast.success("Name updated!"); }
+  const handleEdit = () => { 
+    setEditName(contactName); 
+    setIsEditing(true); 
+    setIsSettingsOpen(false); 
   };
-  const handleDeleteClick = () => { setShowDeleteConfirm(true); setIsSettingsOpen(false); };
+
+  const saveNewName = async () => {
+    if (!editName || !chatMeta || !currentUserId) return;
+    
+    // Check if current user is user_1 or user_2 to update the correct metadata slot
+    const isUser1 = chatMeta.user_1 === currentUserId;
+    const updatePayload = isUser1 
+      ? { user_1_name: editName } 
+      : { user_2_name: editName };
+
+    const { error } = await supabase
+      .from('chats')
+      .update(updatePayload)
+      .eq('id', params.id);
+
+    if (!error) { 
+      setContactName(editName); 
+      setIsEditing(false); 
+      toast.success("Display name saved!"); 
+    } else {
+      toast.error("Failed to update name");
+    }
+  };
+
+  const handleDeleteClick = () => { 
+    setShowDeleteConfirm(true); 
+    setIsSettingsOpen(false); 
+  };
+
   const confirmDelete = async () => {
     const { error } = await supabase.from('chats').delete().eq('id', params.id);
-    if (!error) { toast.success("Contact removed"); router.push('/dashboard'); }
+    if (!error) { 
+      toast.success("Contact removed"); 
+      router.push('/dashboard'); 
+    }
   };
+
   const handleDownloadXML = () => {
     try {
       const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>\n<chat>\n`;
       const xmlFooter = `\n</chat>`;
-      const content = `${xmlHeader}  <info>Chat history with ${contactName}</info>${xmlFooter}`;
+      const content = `${xmlHeader}   <info>Chat history with ${contactName}</info>${xmlFooter}`;
       const blob = new Blob([content], { type: "text/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -120,7 +164,9 @@ export default function ChatPage() {
       a.download = `${contactName}_history.xml`;
       a.click();
       toast.success("XML file downloaded");
-    } catch (e) { toast.error("Download failed"); }
+    } catch (e) { 
+      toast.error("Download failed"); 
+    }
     setIsSettingsOpen(false);
   };
 
@@ -132,13 +178,13 @@ export default function ChatPage() {
             <ArrowLeft size={20} />
           </button>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-linear-to-tr from-blue-500 to-emerald-500 flex items-center justify-center font-bold">
-             {contactName ? contactName[0] : "U"}           
+            <div className="w-10 h-10 rounded-full bg-linear-to-tr from-blue-500 to-emerald-500 flex items-center justify-center font-bold uppercase">
+             {contactName ? contactName[0] : "U"}          
             </div>
             <div>
               <h2 className="font-bold text-lg leading-tight">{contactName}</h2>
               <p className="text-[10px] text-emerald-400 font-medium tracking-wider uppercase">
-               Current Language: {targetLanguage} 
+                Current Language: {targetLanguage} 
               </p>
             </div>
           </div>
@@ -164,19 +210,28 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* RENDER MESSAGES HERE */}
+      {/* FIXED MESSAGE CONTAINERS ALIGNMENT SLOTS */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
-        {messages.map((msg, index) => (
-          <div key={index} className={`flex flex-col ${msg.sender_id === params.id ? 'items-start' : 'items-end'}`}>
-            <div className={`max-w-[80%] p-3 rounded-2xl ${msg.sender_id === params.id ? 'bg-slate-800 text-white rounded-tl-none' : 'bg-blue-600 text-white rounded-tr-none'}`}>
-              <p className="text-sm">{msg.content}</p>
-              <hr className="my-2 border-white/10" />
-              <p className="text-xs italic text-blue-100">
-                <Globe size={10} className="inline mr-1" /> {msg.translated_content}
-              </p>
+        {messages.map((msg, index) => {
+          // Compare against current user ID instead of route parameter token string!
+          const isMe = msg.sender_id === currentUserId;
+
+          return (
+            <div key={index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+              <div className={`max-w-[80%] p-3 rounded-2xl ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
+                <p className="text-sm">{msg.content}</p>
+                {msg.translated_content && (
+                  <>
+                    <hr className="my-2 border-white/10" />
+                    <p className="text-xs italic text-blue-100 flex items-center gap-1">
+                      <Globe size={12} className="inline" /> {msg.translated_content}
+                    </p>
+                  </>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <footer className="p-4 bg-slate-800 border-t border-slate-700">
@@ -208,7 +263,7 @@ export default function ChatPage() {
         </div>
       </footer>
 
-      {/* Modals remain the same */}
+      {/* Edit Modal */}
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
@@ -223,11 +278,12 @@ export default function ChatPage() {
         </div>
       )}
 
+      {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
             <h2 className="text-xl font-bold mb-2">Delete Contact?</h2>
-            <p className="text-red-600 text-sm mb-6">Permanently remove chat history.</p>
+            <p className="text-red-500 text-sm mb-6">Permanently remove chat history.</p>
             <div className="flex gap-3">
               <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 p-3 rounded-xl bg-slate-700">Cancel</button>
               <button onClick={confirmDelete} className="flex-1 p-3 rounded-xl bg-red-600 font-bold">Delete</button>
