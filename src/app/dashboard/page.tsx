@@ -17,29 +17,38 @@ export default function Dashboard() {
   const [userRole, setUserRole] = useState("user");
   const [currentUser, setCurrentUser] = useState<any>(null);
 
-  // Robust function to fetch state and find relationship details
+  // Robust function to pull chats and then look up user profiles cleanly
   const fetchAndSetChats = async (userId: string) => {
-    // Fetch chats alongside sender profile info to get the email identifier
-    const { data, error } = await supabase
+    // 1. Get raw rows matching the user
+    const { data: chatsData, error: chatsError } = await supabase
       .from('chats')
-      .select(`
-        *,
-        sender_profile:profiles!chats_user_1_fkey(email)
-      `)
+      .select('*')
       .or(`user_1.eq.${userId},user_2.eq.${userId}`);
 
-    if (error) {
-      console.error("Error pulling database state:", error.message);
+    if (chatsError) {
+      console.error("Error pulling database state:", chatsError.message);
       return;
     }
 
-    if (data) {
-      // 1. Accepted chats
-      setContacts(data.filter((c: any) => c.status === 'accepted'));
-      
-      // 2. Incoming requests waiting explicitly for you (user_2)
-      setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === userId));
-    }
+    if (!chatsData) return;
+
+    // 2. Fetch profiles to link emails without breaking on explicit constraint names
+    const { data: profilesData } = await supabase
+      .from('profiles')
+      .select('id, email');
+
+    const profileMap = new Map(profilesData?.map(p => [p.id, p.email]) || []);
+
+    // 3. Map profile details into chat list objects
+    const mappedChats = chatsData.map((chat: any) => ({
+      ...chat,
+      sender_email: profileMap.get(chat.user_1) || "Unknown Sender",
+      receiver_email: profileMap.get(chat.user_2) || "Unknown Receiver"
+    }));
+
+    // 4. Update local state
+    setContacts(mappedChats.filter((c: any) => c.status === 'accepted'));
+    setPendingRequests(mappedChats.filter((c: any) => c.status === 'pending' && c.user_2 === userId));
   };
 
   useEffect(() => {
@@ -257,11 +266,10 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
-              // If you are the sender, show the custom label you set.
-              // If you are the receiver, show the sender's profile email address.
+              // Determine clean active user tracking label
               const displayName = isCurrentUserSender 
                 ? chat.contact_name 
-                : (chat.sender_profile?.email || "Incoming User");
+                : chat.sender_email;
 
               return (
                 <div 
@@ -359,8 +367,7 @@ export default function Dashboard() {
             ) : (
               <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
                 {pendingRequests.map((request) => {
-                  // Explicitly fetch the sender's actual email identity via foreign profile relation
-                  const requestSenderEmail = request.sender_profile?.email || "Unknown Sender";
+                  const requestSenderEmail = request.sender_email;
 
                   return (
                     <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
