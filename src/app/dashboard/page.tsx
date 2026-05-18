@@ -17,16 +17,41 @@ export default function Dashboard() {
   const [userRole, setUserRole] = useState("user");
   const [currentUser, setCurrentUser] = useState<any>(null);
 
+  // Robust function to fetch state and find relationship details
+  const fetchAndSetChats = async (userId: string) => {
+    // Fetch chats alongside sender profile info to get the email identifier
+    const { data, error } = await supabase
+      .from('chats')
+      .select(`
+        *,
+        sender_profile:profiles!chats_user_1_fkey(email)
+      `)
+      .or(`user_1.eq.${userId},user_2.eq.${userId}`);
+
+    if (error) {
+      console.error("Error pulling database state:", error.message);
+      return;
+    }
+
+    if (data) {
+      // 1. Accepted chats
+      setContacts(data.filter((c: any) => c.status === 'accepted'));
+      
+      // 2. Incoming requests waiting explicitly for you (user_2)
+      setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === userId));
+    }
+  };
+
   useEffect(() => {
     let chatChannel: any;
 
-    const setupRealtimeChats = async () => {
+    const setupDashboardData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       
       setCurrentUser(user);
       
-      // Fetch user profile role
+      // Get user role profile
       const { data: profile } = await supabase
         .from('profiles')
         .select('role')
@@ -34,42 +59,25 @@ export default function Dashboard() {
         .single();
       if (profile) setUserRole(profile.role);
 
-      // Reusable data fetching function
-      const fetchAndSetChats = async () => {
-        const { data, error } = await supabase
-          .from('chats')
-          .select('*')
-          .or(`user_1.eq.${user.id},user_2.eq.${user.id}`);
+      // Initial data pull
+      await fetchAndSetChats(user.id);
 
-        if (data) {
-          // 1. Set established active contacts
-          setContacts(data.filter((c: any) => c.status === 'accepted'));
-          
-          // 2. Set incoming requests waiting strictly for this user (User B)
-          setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
-        }
-      };
-
-      // Initial fetch on component load
-      await fetchAndSetChats();
-
-      // OPEN REAL-TIME WEBSOCKET LISTENER
+      // Realtime websocket pipeline
       chatChannel = supabase
-        .channel('realtime-chats-changes')
+        .channel('realtime-chats-dashboard')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'chats' },
-          () => {
-            // Automatically re-fetch state values anytime a row updates/inserts
-            fetchAndSetChats();
+          (payload) => {
+            console.log("Realtime state sync event:", payload);
+            fetchAndSetChats(user.id);
           }
         )
         .subscribe();
     };
 
-    setupRealtimeChats();
+    setupDashboardData();
 
-    // Clean up channel listener on component destruction
     return () => {
       if (chatChannel) supabase.removeChannel(chatChannel);
     };
@@ -77,7 +85,7 @@ export default function Dashboard() {
 
   const handleAddContact = async () => {
     if (!searchEmail || !saveName) {
-      toast.error("Invalid: Must enter credentials"); 
+      toast.error("Please fill in all fields"); 
       return;
     }
 
@@ -88,12 +96,12 @@ export default function Dashboard() {
       .single();
 
     if (findError || !targetUser) {
-      toast.error("User does not have an account");
+      toast.error("User account not found");
       return;
     }
 
     if (currentUser?.id === targetUser.id) {
-      toast.error("You cannot add your own email");
+      toast.error("You cannot add your own email address");
       return;
     }
 
@@ -102,38 +110,35 @@ export default function Dashboard() {
       .insert([{ 
         user_1: currentUser?.id,
         user_2: targetUser.id,
-        user_1_name: saveName,
-        user_2_name: currentUser?.email || "Someone",
+        contact_name: saveName, 
         status: 'pending' 
       }]);
 
     if (insertError) {
-      toast.error("Invite already sent or error occurred");
+      console.error("Insert error details:", insertError);
+      toast.error(`Error sending invite: ${insertError.message}`);
     } else {
       toast.success("Invite sent successfully!");
       setIsAddModalOpen(false);
       setSearchEmail("");
       setSaveName("");
+      if (currentUser) fetchAndSetChats(currentUser.id); 
     }
   };
 
   const handleAcceptInvite = async (chatId: string) => {
-    const originalRequest = pendingRequests.find(r => r.id === chatId);
-    const senderIdentity = originalRequest?.user_2_name || "Connected Channel";
-
     const { error } = await supabase
       .from('chats')
-      .update({ 
-        status: 'accepted',
-        user_2_name: senderIdentity 
-      })
+      .update({ status: 'accepted' })
       .eq('id', chatId);
 
     if (!error) {
       toast.success("Invite Accepted!");
-      setIsRequestsModalOpen(false); // Modal closes cleanly, state refreshes via websocket!
+      setIsRequestsModalOpen(false);
+      if (currentUser) fetchAndSetChats(currentUser.id); 
     } else {
-      toast.error("Error accepting invite");
+      console.error("Accept error:", error);
+      toast.error(`Failed to accept: ${error.message}`);
     }
   };
 
@@ -146,8 +151,10 @@ export default function Dashboard() {
     if (!error) {
       toast.error("Invite Declined");
       setIsRequestsModalOpen(false);
+      if (currentUser) fetchAndSetChats(currentUser.id); 
     } else {
-      toast.error("Error declining invite");
+      console.error("Decline error:", error);
+      toast.error(`Failed to decline: ${error.message}`);
     }
   };
   
@@ -164,7 +171,7 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Sidebar Layout Section */}
+      {/* Sidebar */}
       <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 shadow-2xl lg:shadow-none`}>
         <div className="p-8 max-lg:pl-16 max-lg:pr-4">
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
@@ -206,7 +213,6 @@ export default function Dashboard() {
 
       {/* Main Content Area */}
       <main className="flex-1 p-5 sm:p-8 lg:p-12 pt-24 lg:pt-12 overflow-x-hidden">
-        
         <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10 pl-16 lg:pl-0">          
           <div>
             <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Chats</h1>
@@ -237,7 +243,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Contacts Grid Layout */}
+        {/* Contacts Display Grid */}
         {contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-80 border-2 border-dashed border-slate-800 rounded-[2.5rem] bg-slate-800/20 px-6 text-center">
             <div className="p-5 bg-slate-800 rounded-3xl mb-4">
@@ -250,7 +256,12 @@ export default function Dashboard() {
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
-              const renderedDisplayName = isCurrentUserSender ? chat.user_1_name : chat.user_2_name;
+              
+              // If you are the sender, show the custom label you set.
+              // If you are the receiver, show the sender's profile email address.
+              const displayName = isCurrentUserSender 
+                ? chat.contact_name 
+                : (chat.sender_profile?.email || "Incoming User");
 
               return (
                 <div 
@@ -259,11 +270,11 @@ export default function Dashboard() {
                   className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2rem cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:-translate-y-1 transition-all flex items-center gap-5 group"
                 >
                   <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-blue-600 to-blue-400 flex items-center justify-center font-black text-xl shadow-lg shadow-blue-900/40 group-hover:scale-110 transition-transform uppercase">
-                    {renderedDisplayName ? renderedDisplayName[0] : "U"}
+                    {displayName ? displayName[0] : "U"}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="font-bold text-lg group-hover:text-blue-400 transition-colors truncate">
-                      {renderedDisplayName || "Unknown User"}
+                      {displayName}
                     </h3>
                     <div className="flex items-center gap-2 mt-0.5">
                       <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
@@ -277,7 +288,7 @@ export default function Dashboard() {
         )}
       </main>
 
-      {/* --- ADD MODAL --- */}
+      {/* --- ADD CONTACT MODAL --- */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl overflow-hidden relative">
@@ -300,7 +311,7 @@ export default function Dashboard() {
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Identify As</label>
                 <input 
                   type="text"
-                  placeholder="e.g. Project Manager"
+                  placeholder="e.g. Alex"
                   className="w-full p-4 rounded-2xl bg-slate-900 border border-slate-700 outline-none focus:border-emerald-500 transition-all text-sm text-white"
                   value={saveName}
                   onChange={(e) => setSaveName(e.target.value)}
@@ -326,7 +337,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* --- REQUESTS MODAL --- */}
+      {/* --- INCOMING REQUESTS MODAL --- */}
       {isRequestsModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl relative">
@@ -346,34 +357,41 @@ export default function Dashboard() {
                 <p className="text-slate-500 font-medium">Your inbox is clean!</p>
               </div>
             ) : (
-              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-                {pendingRequests.map((request) => (
-                  <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
-                    <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-blue-400 uppercase">
-                        {request.user_2_name ? request.user_2_name[0] : "U"}
+              <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                {pendingRequests.map((request) => {
+                  // Explicitly fetch the sender's actual email identity via foreign profile relation
+                  const requestSenderEmail = request.sender_profile?.email || "Unknown Sender";
+
+                  return (
+                    <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
+                      <div className="flex items-center gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-blue-400 uppercase">
+                          {requestSenderEmail[0]}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-bold text-sm truncate">{requestSenderEmail}</p>
+                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
+                            Wants to connect as: <span className="text-blue-400 normal-case font-medium">{request.contact_name}</span>
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-bold text-sm">{request.user_2_name || "Unknown User"}</p>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Sent You A Request</p>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => handleAcceptInvite(request.id)}
+                          className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-black transition-all"
+                        >
+                          Accept
+                        </button>
+                        <button 
+                          onClick={() => handleDeclineInvite(request.id)}
+                          className="flex-1 py-3 bg-slate-800 hover:bg-red-600/20 hover:text-red-400 rounded-xl text-xs font-bold transition-all border border-slate-700"
+                        >
+                          Decline
+                        </button>
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <button 
-                        onClick={() => handleAcceptInvite(request.id)}
-                        className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-black transition-all"
-                      >
-                        Accept
-                      </button>
-                      <button 
-                        onClick={() => handleDeclineInvite(request.id)}
-                        className="flex-1 py-3 bg-slate-800 hover:bg-red-600/20 hover:text-red-400 rounded-xl text-xs font-bold transition-all border border-slate-700"
-                      >
-                        Decline
-                      </button>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
