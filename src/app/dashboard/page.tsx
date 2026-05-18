@@ -279,7 +279,7 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
-              // FIXED: Added absolute fallback layers to guarantee code won't freeze if data fields arrive incomplete
+              // RESOLVED: If I am the sender, show the receiver's identity. If I am the receiver, show the sender's identity.
               const displayName = isCurrentUserSender 
                 ? (chat.user_2_name || chat.receiver_email || "Chat Partner") 
                 : (chat.user_1_name || chat.sender_email || "Chat Partner");
