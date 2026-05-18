@@ -128,10 +128,16 @@ export default function Dashboard() {
 
       {/* Sidebar - Solid layout colors implemented to isolate bleed-through views */}
       <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 shadow-2xl lg:shadow-none`}>
-        <div className="p-8">
-          <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400">LingoSyncra</h2>
-          <p className="text-[10px] text-slate-500 tracking-[0.2em] uppercase mt-1">Your go to translation app</p>
-        </div>
+  {/* Increased left padding slightly and added pl-16 on mobile to clear the close icon space */}
+  <div className="p-8 max-lg:pl-16 max-lg:pr-4">
+    <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
+      LingoSyncra
+    </h2>
+    {/* Added break-words so the subtitle cleanly wraps onto a new line if it runs out of space */}
+    <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 wrap-break-words leading-relaxed">
+      Your go-to translation app
+    </p>
+  </div>
         
         <nav className="mt-4 space-y-2 px-6">
           <button className="flex items-center gap-4 w-full p-4 bg-blue-600 rounded-2xl font-bold text-sm shadow-lg shadow-blue-900/20"><MessageSquare size={18}/> Chats</button>
