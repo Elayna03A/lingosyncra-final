@@ -279,10 +279,10 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
-              // RESOLVED: If I am the sender, show the receiver's identity. If I am the receiver, show the sender's identity.
+              // FIXED: Swapped mappings so you don't look at your own name
               const displayName = isCurrentUserSender 
-                ? (chat.user_2_name || chat.receiver_email || "Chat Partner") 
-                : (chat.user_1_name || chat.sender_email || "Chat Partner");
+                ? (chat.user_1_name || chat.receiver_email || "Chat Partner") 
+                : (chat.user_2_name || chat.sender_email || "Chat Partner");
 
               return (
                 <div 
