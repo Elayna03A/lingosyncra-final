@@ -67,7 +67,7 @@ export default function Dashboard() {
 
       await fetchAndSetChats(user.id);
 
-      // Real-time state channel pipeline
+      // Real-time state channel pipeline with fallback mechanisms
       chatChannel = supabase
         .channel('realtime-chats-dashboard')
         .on(
@@ -78,7 +78,13 @@ export default function Dashboard() {
             fetchAndSetChats(user.id);
           }
         )
-        .subscribe();
+        .subscribe((status) => {
+          // Fallback mechanism: If WebSocket fails or times out, trigger manual fetch backup
+          if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+            console.log("Realtime channel connection down, running backup pull.");
+            fetchAndSetChats(user.id);
+          }
+        });
     };
 
     setupDashboardData();
@@ -131,41 +137,33 @@ export default function Dashboard() {
     }
   };
 
-  // FIXED: Handles adding nicknames and clearing out active notification list instantly
+  // FIXED: No longer uses window.prompt(). Quietly auto-accepts and refreshes state arrays
   const handleAcceptInvite = async (chatId: string) => {
     const incomingRequest = pendingRequests.find((r) => r.id === chatId);
-    const fallbackName = incomingRequest?.sender_email || "Chat Partner";
-
-    // Ask the user to assign their own local nickname for this contact card
-    const customLabelName = prompt(
-      `Accept invite from ${fallbackName}? Enter a chat display name for them:`,
-      fallbackName
-    );
-
-    // Stop execution if they hit cancel or exit the window prompt
-    if (customLabelName === null) return;
-
-    const chosenName = customLabelName.trim() || fallbackName;
+    
+    // Automatically determine a local nickname utilizing the sender's email structure
+    const autoNickname = incomingRequest?.sender_email 
+      ? incomingRequest.sender_email.split('@')[0] 
+      : "Chat Partner";
 
     const { error } = await supabase
       .from('chats')
       .update({ 
         status: 'accepted',
-        user_2_name: chosenName // Sets nickname for the receiver
+        user_2_name: autoNickname // Silently populate the column value to unlock grid cards
       })
       .eq('id', chatId);
 
     if (!error) {
       toast.success("Invite Accepted!");
-      setIsRequestsModalOpen(false); // Close requests pop-up immediately
-      if (currentUser) await fetchAndSetChats(currentUser.id); // Refresh layout list arrays
+      setIsRequestsModalOpen(false); // Close modal completely
+      if (currentUser) await fetchAndSetChats(currentUser.id); 
     } else {
       console.error("Accept error details:", error);
       toast.error(`Failed to accept: ${error.message}`);
     }
   };
 
-  // FIXED: Drop data row states instantly when declining an request entry
   const handleDeclineInvite = async (chatId: string) => {
     const { error } = await supabase
       .from('chats')
@@ -174,8 +172,8 @@ export default function Dashboard() {
 
     if (!error) {
       toast.error("Invite Declined");
-      setIsRequestsModalOpen(false); // Close requests window
-      if (currentUser) await fetchAndSetChats(currentUser.id); // Re-sync active badge lists
+      setIsRequestsModalOpen(false); 
+      if (currentUser) await fetchAndSetChats(currentUser.id); 
     } else {
       console.error("Decline error details:", error);
       toast.error(`Failed to decline: ${error.message}`);
@@ -281,18 +279,19 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
+              // FIXED: Added absolute fallback layers to guarantee code won't freeze if data fields arrive incomplete
               const displayName = isCurrentUserSender 
-                ? (chat.user_1_name || chat.receiver_email) 
-                : (chat.user_2_name || chat.sender_email);
+                ? (chat.user_2_name || chat.receiver_email || "Chat Partner") 
+                : (chat.user_1_name || chat.sender_email || "Chat Partner");
 
               return (
                 <div 
                   key={chat.id} 
                   onClick={() => router.push(`/chat/${chat.id}`)}
-                  className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2rem cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:-translate-y-1 transition-all flex items-center gap-5 group"
+                  className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2xl cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:-translate-y-1 transition-all flex items-center gap-5 group"
                 >
                   <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-blue-600 to-blue-400 flex items-center justify-center font-black text-xl shadow-lg shadow-blue-900/40 group-hover:scale-110 transition-transform uppercase">
-                    {displayName ? displayName[0] : "U"}
+                    {displayName[0]}
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="font-bold text-lg group-hover:text-blue-400 transition-colors truncate">
