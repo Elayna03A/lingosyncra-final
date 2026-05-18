@@ -17,108 +17,106 @@ export default function Dashboard() {
   const [pendingRequests, setPendingRequests] = useState<any[]>([]); 
   const [userRole, setUserRole] = useState("user");
 
-useEffect(() => {
-  const fetchDashboardData = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-      
-      if (profile) setUserRole(profile.role);
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+        
+        if (profile) setUserRole(profile.role);
 
-      const { data, error } = await supabase
-  .from('chats') 
-  .select('*')
-  // Check if current logged-in User ID is either user_1 OR user_2
-  .or(`user_1.eq.${user.id},user_2.eq.${user.id}`); 
+        const { data, error } = await supabase
+          .from('chats') 
+          .select('*')
+          .or(`user_1.eq.${user.id},user_2.eq.${user.id}`); 
 
-if (data) {
-  // 1. Established friends (Both sides accepted)
-  setContacts(data.filter((c: any) => c.status === 'accepted'));
-  
-  // 2. Invites waiting for THIS logged-in user to accept (Incoming)
-  setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
-
-}
-    }
-  };
-  fetchDashboardData();
-}, []);
+        if (data) {
+          // 1. Established friends (Both sides accepted)
+          setContacts(data.filter((c: any) => c.status === 'accepted'));
+          
+          // 2. Invites waiting for THIS logged-in user to accept (Incoming)
+          setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
+        }
+      }
+    };
+    fetchDashboardData();
+  }, []);
 
 
   const handleAddContact = async () => {
-  if (!searchEmail || !saveName) {
-    toast.error("Invalid: Must enter credentials"); 
-    return;
-  }
+    if (!searchEmail || !saveName) {
+      toast.error("Invalid: Must enter credentials"); 
+      return;
+    }
 
-  const { data: targetUser, error: findError } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('email', searchEmail.trim()) // <-- Add .trim() here
-    .single();
+    const { data: targetUser, error: findError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('email', searchEmail.trim())
+      .single();
 
-  if (findError || !targetUser) {
-    toast.error("User does not have an account");
-    return;
-  }
+    if (findError || !targetUser) {
+      toast.error("User does not have an account");
+      return;
+    }
 
-  const { data: { user: currentUser } } = await supabase.auth.getUser();
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
 
-  const { error: insertError } = await supabase
-    .from('chats')
-    .insert([{ 
-      user_1: currentUser?.id, 
-      user_2: targetUser.id, 
-      contact_name: saveName, 
-      status: 'pending' 
-    }]);
+    const { error: insertError } = await supabase
+      .from('chats')
+      .insert([{ 
+        user_1: currentUser?.id, 
+        user_2: targetUser.id, 
+        contact_name: saveName, 
+        status: 'pending' 
+      }]);
 
-  if (insertError) {
-    toast.error("Invite already sent or error occurred");
-  } else {
-    toast.success("Invite sent successfully!");
-    setIsAddModalOpen(false);
-    setSearchEmail("");
-    setSaveName("");
-  }
-};
+    if (insertError) {
+      toast.error("Invite already sent or error occurred");
+    } else {
+      toast.success("Invite sent successfully!");
+      setIsAddModalOpen(false);
+      setSearchEmail("");
+      setSaveName("");
+    }
+  };
 
-const handleAcceptInvite = async (chatId: string) => {
-  const { error } = await supabase
-    .from('chats')
-    .update({ status: 'accepted' })
-    .eq('id', chatId);
+  const handleAcceptInvite = async (chatId: string) => {
+    const { error } = await supabase
+      .from('chats')
+      .update({ status: 'accepted' })
+      .eq('id', chatId);
 
-  if (!error) {
-    toast.success("Invite Accepted!");
-    window.location.reload(); 
-  } else {
-    toast.error("Error accepting invite");
-  }
-};
+    if (!error) {
+      toast.success("Invite Accepted!");
+      window.location.reload(); 
+    } else {
+      toast.error("Error accepting invite");
+    }
+  };
 
-const handleDeclineInvite = async (chatId: string) => {
-  const { error } = await supabase
-    .from('chats')
-    .update({ status: 'declined' }) 
-    .eq('id', chatId);
+  const handleDeclineInvite = async (chatId: string) => {
+    const { error } = await supabase
+      .from('chats')
+      .update({ status: 'declined' }) 
+      .eq('id', chatId);
 
-  if (!error) {
-    toast.error("Invite Declined");
-    window.location.reload(); 
-  } else {
-    toast.error("Error declining invite");
-  }
-};
+    if (!error) {
+      toast.error("Invite Declined");
+      window.location.reload(); 
+    } else {
+      toast.error("Error declining invite");
+    }
+  };
 
   return (
     <div className="flex min-h-screen bg-slate-900 text-white">
 
-      {/* Mobile Hamburger Menu - Positioned better*/}
+      {/* Mobile Hamburger Menu - Layer priority heightened */}
       <div className="lg:hidden fixed top-5 left-5 z-50">
         <button 
           onClick={() => setSidebarOpen(!isSidebarOpen)} 
@@ -128,8 +126,8 @@ const handleDeclineInvite = async (chatId: string) => {
         </button>
       </div>
 
-      {/* Sidebar - Added backdrop blur for mobile */}
-      <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800/95 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 backdrop-blur-lg lg:backdrop-blur-none`}>
+      {/* Sidebar - Solid layout colors implemented to isolate bleed-through views */}
+      <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 shadow-2xl lg:shadow-none`}>
         <div className="p-8">
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400">LingoSyncra</h2>
           <p className="text-[10px] text-slate-500 tracking-[0.2em] uppercase mt-1">Your go to translation app</p>
@@ -165,8 +163,8 @@ const handleDeclineInvite = async (chatId: string) => {
       {/* Main Content Area */}
       <main className="flex-1 p-5 sm:p-8 lg:p-12 pt-24 lg:pt-12 overflow-x-hidden">
         
-        {/* Header - Stacks on small mobile, row on larger screens */}
-        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10">
+        {/* FIX: Added 'max-sm:pl-16' so the text shifts perfectly away from the hamburger icon on mobile views */}
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10 max-sm:pl-16">
           <div>
             <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Chats</h1>
             <div className="h-1 w-12 bg-blue-500 mt-2 rounded-full"></div>
@@ -196,7 +194,7 @@ const handleDeclineInvite = async (chatId: string) => {
           </div>
         </header>
 
-        {/* Contacts Grid - Responsive cards */}
+        {/* Contacts Grid */}
         {contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-80 border-2 border-dashed border-slate-800 rounded-[2.5rem] bg-slate-800/20 px-6 text-center">
             <div className="p-5 bg-slate-800 rounded-3xl mb-4">
@@ -211,7 +209,7 @@ const handleDeclineInvite = async (chatId: string) => {
               <div 
                 key={chat.id} 
                 onClick={() => router.push(`/chat/${chat.id}`)}
-                className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2rem cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:translate-y--4px transition-all flex items-center gap-5 group"
+                className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2rem cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:-translate-y-1 transition-all flex items-center gap-5 group"
               >
                 <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-blue-600 to-blue-400 flex items-center justify-center font-black text-xl shadow-lg shadow-blue-900/40 group-hover:scale-110 transition-transform">
                   {chat.contact_name ? chat.contact_name[0] : "U"}
@@ -229,7 +227,7 @@ const handleDeclineInvite = async (chatId: string) => {
         )}
       </main>
 
-      {/* --- MODALS (Responsive already, but improved padding) --- */}
+      {/* --- MODALS --- */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-100 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl overflow-hidden relative">
