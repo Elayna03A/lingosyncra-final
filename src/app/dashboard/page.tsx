@@ -110,7 +110,6 @@ export default function Dashboard() {
       return;
     }
 
-    // Fixed: Using user_1_name instead of contact_name!
     const { error: insertError } = await supabase
       .from('chats')
       .insert([{ 
@@ -132,22 +131,41 @@ export default function Dashboard() {
     }
   };
 
+  // FIXED: Handles adding nicknames and clearing out active notification list instantly
   const handleAcceptInvite = async (chatId: string) => {
+    const incomingRequest = pendingRequests.find((r) => r.id === chatId);
+    const fallbackName = incomingRequest?.sender_email || "Chat Partner";
+
+    // Ask the user to assign their own local nickname for this contact card
+    const customLabelName = prompt(
+      `Accept invite from ${fallbackName}? Enter a chat display name for them:`,
+      fallbackName
+    );
+
+    // Stop execution if they hit cancel or exit the window prompt
+    if (customLabelName === null) return;
+
+    const chosenName = customLabelName.trim() || fallbackName;
+
     const { error } = await supabase
       .from('chats')
-      .update({ status: 'accepted' })
+      .update({ 
+        status: 'accepted',
+        user_2_name: chosenName // Sets nickname for the receiver
+      })
       .eq('id', chatId);
 
     if (!error) {
       toast.success("Invite Accepted!");
-      setIsRequestsModalOpen(false);
-      if (currentUser) fetchAndSetChats(currentUser.id); 
+      setIsRequestsModalOpen(false); // Close requests pop-up immediately
+      if (currentUser) await fetchAndSetChats(currentUser.id); // Refresh layout list arrays
     } else {
-      console.error("Accept error:", error);
+      console.error("Accept error details:", error);
       toast.error(`Failed to accept: ${error.message}`);
     }
   };
 
+  // FIXED: Drop data row states instantly when declining an request entry
   const handleDeclineInvite = async (chatId: string) => {
     const { error } = await supabase
       .from('chats')
@@ -156,10 +174,10 @@ export default function Dashboard() {
 
     if (!error) {
       toast.error("Invite Declined");
-      setIsRequestsModalOpen(false);
-      if (currentUser) fetchAndSetChats(currentUser.id); 
+      setIsRequestsModalOpen(false); // Close requests window
+      if (currentUser) await fetchAndSetChats(currentUser.id); // Re-sync active badge lists
     } else {
-      console.error("Decline error:", error);
+      console.error("Decline error details:", error);
       toast.error(`Failed to decline: ${error.message}`);
     }
   };
@@ -183,7 +201,7 @@ export default function Dashboard() {
           <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
             LingoSyncra
           </h2>
-          <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 bwrap-reak-words leading-relaxed">
+          <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 wrap-break-words leading-relaxed">
             Your go-to translation app
           </p>
         </div>
@@ -263,8 +281,6 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
-              // If you are the sender, show the custom label you set in user_1_name.
-              // If you received it, show what they named you, falling back to their registration email.
               const displayName = isCurrentUserSender 
                 ? (chat.user_1_name || chat.receiver_email) 
                 : (chat.user_2_name || chat.sender_email);
