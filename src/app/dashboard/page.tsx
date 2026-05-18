@@ -38,7 +38,7 @@ export default function Dashboard() {
           // 1. Established friends (Both sides accepted)
           setContacts(data.filter((c: any) => c.status === 'accepted'));
           
-          // 2. Invites waiting for THIS logged-in user to accept (Incoming)
+          // 2. FIXED: Isolates requests strictly waiting for THIS user (User B) to accept
           setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
         }
       }
@@ -66,12 +66,19 @@ export default function Dashboard() {
 
     const { data: { user: currentUser } } = await supabase.auth.getUser();
 
+    // Prevent users from adding themselves
+    if (currentUser?.id === targetUser.id) {
+      toast.error("You cannot add your own email");
+      return;
+    }
+
     const { error: insertError } = await supabase
       .from('chats')
       .insert([{ 
-        user_1: currentUser?.id, 
-        user_2: targetUser.id, 
-        contact_name: saveName, 
+        user_1: currentUser?.id,       // Sender (User A)
+        user_2: targetUser.id,          // Receiver (User B)
+        // FIX: Store the sender's email here so the receiver can see who sent it
+        contact_name: currentUser?.email || "Someone", 
         status: 'pending' 
       }]);
 
@@ -112,7 +119,7 @@ export default function Dashboard() {
       toast.error("Error declining invite");
     }
   };
-
+  
   return (
     <div className="flex min-h-screen bg-slate-900 text-white">
 
