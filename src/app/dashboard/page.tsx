@@ -18,34 +18,61 @@ export default function Dashboard() {
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
-    const fetchDashboardData = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setCurrentUser(user);
-        
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', user.id)
-          .single();
-        
-        if (profile) setUserRole(profile.role);
+    let chatChannel: any;
 
+    const setupRealtimeChats = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      
+      setCurrentUser(user);
+      
+      // Fetch user profile role
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+      if (profile) setUserRole(profile.role);
+
+      // Reusable data fetching function
+      const fetchAndSetChats = async () => {
         const { data, error } = await supabase
-          .from('chats') 
+          .from('chats')
           .select('*')
-          .or(`user_1.eq.${user.id},user_2.eq.${user.id}`); 
+          .or(`user_1.eq.${user.id},user_2.eq.${user.id}`);
 
         if (data) {
-          // 1. Established friends (Both sides accepted)
+          // 1. Set established active contacts
           setContacts(data.filter((c: any) => c.status === 'accepted'));
           
-          // 2. Isolate requests strictly waiting for THIS user (User B) to accept
+          // 2. Set incoming requests waiting strictly for this user (User B)
           setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
         }
-      }
+      };
+
+      // Initial fetch on component load
+      await fetchAndSetChats();
+
+      // OPEN REAL-TIME WEBSOCKET LISTENER
+      chatChannel = supabase
+        .channel('realtime-chats-changes')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'chats' },
+          () => {
+            // Automatically re-fetch state values anytime a row updates/inserts
+            fetchAndSetChats();
+          }
+        )
+        .subscribe();
     };
-    fetchDashboardData();
+
+    setupRealtimeChats();
+
+    // Clean up channel listener on component destruction
+    return () => {
+      if (chatChannel) supabase.removeChannel(chatChannel);
+    };
   }, []);
 
   const handleAddContact = async () => {
@@ -65,9 +92,7 @@ export default function Dashboard() {
       return;
     }
 
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-
-    if (authUser?.id === targetUser.id) {
+    if (currentUser?.id === targetUser.id) {
       toast.error("You cannot add your own email");
       return;
     }
@@ -75,10 +100,10 @@ export default function Dashboard() {
     const { error: insertError } = await supabase
       .from('chats')
       .insert([{ 
-        user_1: authUser?.id,                           // Sender (User A)
-        user_2: targetUser.id,                          // Receiver (User B)
-        user_1_name: saveName,                          // What User A wants to call User B
-        user_2_name: authUser?.email || "Someone",      // Tells User B exactly who sent the invite
+        user_1: currentUser?.id,
+        user_2: targetUser.id,
+        user_1_name: saveName,
+        user_2_name: currentUser?.email || "Someone",
         status: 'pending' 
       }]);
 
@@ -89,12 +114,10 @@ export default function Dashboard() {
       setIsAddModalOpen(false);
       setSearchEmail("");
       setSaveName("");
-      window.location.reload(); // Reload to refresh local state queries immediately
     }
   };
 
   const handleAcceptInvite = async (chatId: string) => {
-    // Locate the matching request object inside our array state
     const originalRequest = pendingRequests.find(r => r.id === chatId);
     const senderIdentity = originalRequest?.user_2_name || "Connected Channel";
 
@@ -102,13 +125,13 @@ export default function Dashboard() {
       .from('chats')
       .update({ 
         status: 'accepted',
-        user_2_name: senderIdentity // Safeguards that user_2_name holds a string for User B's grid layout
+        user_2_name: senderIdentity 
       })
       .eq('id', chatId);
 
     if (!error) {
       toast.success("Invite Accepted!");
-      window.location.reload(); 
+      setIsRequestsModalOpen(false); // Modal closes cleanly, state refreshes via websocket!
     } else {
       toast.error("Error accepting invite");
     }
@@ -122,7 +145,7 @@ export default function Dashboard() {
 
     if (!error) {
       toast.error("Invite Declined");
-      window.location.reload(); 
+      setIsRequestsModalOpen(false);
     } else {
       toast.error("Error declining invite");
     }
