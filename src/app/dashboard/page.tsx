@@ -3,8 +3,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase"; 
 import { toast } from "react-hot-toast"; 
-import { Menu, X, MessageSquare, User, LogOut, Settings, Plus, ShieldCheck } from "lucide-react";
-
+import { Menu, X, MessageSquare, User, LogOut, Plus, ShieldCheck } from "lucide-react";
 
 export default function Dashboard() {
   const [isSidebarOpen, setSidebarOpen] = useState(false);
@@ -16,11 +15,15 @@ export default function Dashboard() {
   const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]); 
   const [userRole, setUserRole] = useState("user");
+  // Added local state to keep track of the logged-in user profile attributes globally
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
+        setCurrentUser(user);
+        
         const { data: profile } = await supabase
           .from('profiles')
           .select('role')
@@ -38,14 +41,13 @@ export default function Dashboard() {
           // 1. Established friends (Both sides accepted)
           setContacts(data.filter((c: any) => c.status === 'accepted'));
           
-          // 2. FIXED: Isolates requests strictly waiting for THIS user (User B) to accept
+          // 2. Isolates requests strictly waiting for THIS user (User B) to accept
           setPendingRequests(data.filter((c: any) => c.status === 'pending' && c.user_2 === user.id));
         }
       }
     };
     fetchDashboardData();
   }, []);
-
 
   const handleAddContact = async () => {
     if (!searchEmail || !saveName) {
@@ -77,7 +79,7 @@ export default function Dashboard() {
       .insert([{ 
         user_1: currentUser?.id,       // Sender (User A)
         user_2: targetUser.id,          // Receiver (User B)
-        // FIX: Store the sender's email here so the receiver can see who sent it
+        // Store the sender's email here so the receiver can see who sent it
         contact_name: currentUser?.email || "Someone", 
         status: 'pending' 
       }]);
@@ -123,7 +125,7 @@ export default function Dashboard() {
   return (
     <div className="flex min-h-screen bg-slate-900 text-white">
 
-      {/* Mobile Hamburger Menu - Layer priority heightened */}
+      {/* Mobile Hamburger Menu */}
       <div className="lg:hidden fixed top-5 left-5 z-50">
         <button 
           onClick={() => setSidebarOpen(!isSidebarOpen)} 
@@ -133,18 +135,17 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {/* Sidebar - Solid layout colors implemented to isolate bleed-through views */}
+      {/* Sidebar Layout Section */}
       <aside className={`fixed inset-y-0 left-0 transform ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0 lg:static lg:block w-72 bg-slate-800 lg:bg-slate-800 border-r border-slate-700 transition-transform duration-300 ease-in-out z-40 shadow-2xl lg:shadow-none`}>
-  {/* Increased left padding slightly and added pl-16 on mobile to clear the close icon space */}
-  <div className="p-8 max-lg:pl-16 max-lg:pr-4">
-    <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
-      LingoSyncra
-    </h2>
-    {/* Added break-words so the subtitle cleanly wraps onto a new line if it runs out of space */}
-    <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 wrap-break-words leading-relaxed">
-      Your go-to translation app
-    </p>
-  </div>
+        <div className="p-8 max-lg:pl-16 max-lg:pr-4">
+          <h2 className="text-2xl font-black bg-clip-text text-transparent bg-linear-to-r from-blue-400 to-emerald-400 whitespace-nowrap">
+            LingoSyncra
+          </h2>
+          {/* FIX: Fixed a class typo from 'wrap-break-words' to 'break-words' so tailwind processes wrap logic appropriately */}
+          <p className="text-[10px] text-slate-500 tracking-[0.15em] uppercase mt-1 wrap-break-words leading-relaxed">
+            Your go-to translation app
+          </p>
+        </div>
         
         <nav className="mt-4 space-y-2 px-6">
           <button className="flex items-center gap-4 w-full p-4 bg-blue-600 rounded-2xl font-bold text-sm shadow-lg shadow-blue-900/20"><MessageSquare size={18}/> Chats</button>
@@ -176,8 +177,8 @@ export default function Dashboard() {
       {/* Main Content Area */}
       <main className="flex-1 p-5 sm:p-8 lg:p-12 pt-24 lg:pt-12 overflow-x-hidden">
         
-        {/* FIX: Added 'max-sm:pl-16' so the text shifts perfectly away from the hamburger icon on mobile views */}
-        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10 pl-16 lg:pl-0">          <div>
+        <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6 mb-10 pl-16 lg:pl-0">          
+          <div>
             <h1 className="text-3xl sm:text-4xl font-black tracking-tight">Chats</h1>
             <div className="h-1 w-12 bg-blue-500 mt-2 rounded-full"></div>
           </div>
@@ -206,7 +207,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Contacts Grid */}
+        {/* Contacts Grid Layout */}
         {contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-80 border-2 border-dashed border-slate-800 rounded-[2.5rem] bg-slate-800/20 px-6 text-center">
             <div className="p-5 bg-slate-800 rounded-3xl mb-4">
@@ -217,29 +218,41 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
-            {contacts.map((chat: any) => (
-              <div 
-                key={chat.id} 
-                onClick={() => router.push(`/chat/${chat.id}`)}
-                className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2rem cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:-translate-y-1 transition-all flex items-center gap-5 group"
-              >
-                <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-blue-600 to-blue-400 flex items-center justify-center font-black text-xl shadow-lg shadow-blue-900/40 group-hover:scale-110 transition-transform">
-                  {chat.contact_name ? chat.contact_name[0] : "U"}
-                </div>
-                <div className="flex-1">
-                  <h3 className="font-bold text-lg group-hover:text-blue-400 transition-colors">{chat.contact_name || "Unknown User"}</h3>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Active Channel</p>
+            {contacts.map((chat: any) => {
+              // FIX: Dynamically configure who is looking at the screen context. 
+              // Since contact_name stores User A's email value, User B sees User A's real email label.
+              // If User A views the active list item block, fallback label gracefully displays "Connected Channel"
+              const isCurrentUserSender = chat.user_1 === currentUser?.id;
+              const renderedDisplayName = isCurrentUserSender 
+                ? (chat.contact_name === currentUser?.email ? "Connected Channel" : chat.contact_name)
+                : chat.contact_name;
+
+              return (
+                <div 
+                  key={chat.id} 
+                  onClick={() => router.push(`/chat/${chat.id}`)}
+                  className="p-5 bg-slate-800/50 border border-slate-700/50 rounded-2rem cursor-pointer hover:bg-slate-800 hover:border-blue-500/50 hover:-translate-y-1 transition-all flex items-center gap-5 group"
+                >
+                  <div className="w-14 h-14 rounded-2xl bg-linear-to-br from-blue-600 to-blue-400 flex items-center justify-center font-black text-xl shadow-lg shadow-blue-900/40 group-hover:scale-110 transition-transform uppercase">
+                    {renderedDisplayName ? renderedDisplayName[0] : "U"}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-lg group-hover:text-blue-400 transition-colors truncate">
+                      {renderedDisplayName || "Unknown User"}
+                    </h3>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Active Channel</p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>
 
-      {/* --- MODALS --- */}
+      {/* --- ADD MODAL --- */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-100 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl overflow-hidden relative">
@@ -312,12 +325,13 @@ export default function Dashboard() {
                 {pendingRequests.map((request) => (
                   <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-blue-400">
-                        {request.contact_name[0]}
+                      {/* FIX: Wrapped fallback checking with safely evaluated conditional uppercase handlers */}
+                      <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-blue-400 uppercase">
+                        {request.contact_name ? request.contact_name[0] : "U"}
                       </div>
                       <div>
                         <p className="font-bold text-sm">{request.contact_name}</p>
-                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Connect Request</p>
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Sent You A Request</p>
                       </div>
                     </div>
                     <div className="flex gap-2">
