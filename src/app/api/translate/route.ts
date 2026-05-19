@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
-// Initialize the correct Google Gen AI SDK package securely
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+// Initialize the correct Google Gen AI SDK package securely using the public key name
+const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY || "" });
 
 export async function POST(request: Request) {
   try {
@@ -12,8 +12,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    if (!process.env.GEMINI_API_KEY) {
-      console.error("Missing critical environment configuration variable: GEMINI_API_KEY");
+    // Check for the updated public variable name
+    if (!process.env.NEXT_PUBLIC_GEMINI_API_KEY) {
+      console.error("Missing critical environment configuration variable: NEXT_PUBLIC_GEMINI_API_KEY");
       return NextResponse.json({ error: "Server Error: Translation service configuration key missing." }, { status: 500 });
     }
 
