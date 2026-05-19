@@ -4,7 +4,6 @@ import { useRouter, useParams } from "next/navigation";
 import { Send, ArrowLeft, Globe, ChevronUp, MoreVertical, Edit2, Trash2, Download, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "react-hot-toast";
-import { translateText } from "@/lib/gemini";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -86,7 +85,7 @@ export default function ChatPage() {
     setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
   };
 
-  // 2. RESILIENT REAL-TIME BROADCAST LISTENER (Listens to ALL changes on this chat)
+  // 2. RESILIENT REAL-TIME BROADCAST LISTENER
   useEffect(() => {
     if (!activeChatId) return;
     const safeChatId = String(activeChatId).trim();
@@ -116,9 +115,9 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeChatId]);
+  }, [activeChatId, messages]); // Added messages dependency here to ensure updates trigger visual changes immediately
 
-const handleSendMessage = async () => {
+  const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
     // Fetch up-to-the-second details regarding the recipient's translation mode
