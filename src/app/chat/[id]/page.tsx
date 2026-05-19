@@ -118,8 +118,7 @@ export default function ChatPage() {
     };
   }, [activeChatId]);
 
-  // 3. SEND & TRANSLATE MESSAGE ENGINE
-  const handleSendMessage = async () => {
+const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
     // Fetch up-to-the-second details regarding the recipient's translation mode
@@ -139,8 +138,8 @@ export default function ChatPage() {
     const originalText = message;
     setMessage(""); // Clear instantly for UI responsiveness
 
-    // If receiver doesn't need translation (reads English), save directly
-    if (receiverLangObj.name.toLowerCase().trim() === "english") {
+    // If receiver reads English, bypass the translation API route completely!
+    if (receiverLangCode === 'en' || receiverLangObj.name.toLowerCase().includes("english")) {
       await supabase.from("messages").insert([
         {
           chat_id: activeChatId,
