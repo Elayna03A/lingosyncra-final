@@ -182,18 +182,41 @@ export default function ChatPage() {
       const resultData = await response.json();
 
       if (response.ok && resultData.translatedText) {
+        const cleanTranslation = resultData.translatedText.trim();
+
+        // CHANGE 1: Update local screen state directly for immediate visual feedback
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === insertedMsg.id
+              ? { ...msg, translated_content: cleanTranslation }
+              : msg
+          )
+        );
+
+        // Save translation result to Supabase
         await supabase
           .from("messages")
-          .update({ translated_content: resultData.translatedText.trim() })
+          .update({ translated_content: cleanTranslation })
           .eq("id", insertedMsg.id);
       } else {
         throw new Error(resultData.error || "API error");
       }
     } catch (err: any) {
       console.error("Translation run background tracking failure:", err);
+      const errorString = `[Translation Error: ${err.message || "Failed to process"}]`;
+
+      // Update local screen state directly on failure
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === insertedMsg.id
+            ? { ...msg, translated_content: errorString }
+            : msg
+        )
+      );
+
       await supabase
         .from("messages")
-        .update({ translated_content: "[Translation error occurred]" })
+        .update({ translated_content: errorString })
         .eq("id", insertedMsg.id);
     }
   };
@@ -284,7 +307,10 @@ export default function ChatPage() {
           
           // Determine if translation line is necessary to render for the viewer
           const isTranslating = msg.translated_content === "Translating...";
-          const isError = msg.translated_content === "[Translation error occurred]";
+          
+          // CHANGE 2: Flexible error check to catch all background error formats reliably
+          const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
+          
           const hasTranslationText = msg.translated_content && 
                                      !isTranslating && 
                                      !isError && 
