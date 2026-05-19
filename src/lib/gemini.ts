@@ -1,27 +1,24 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-// Initialize the Gemini API
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY!);
-
 /**
- * Translates text into a target language using Gemini AI
+ * Route proxy that safely sends translation requests to our internal Next.js API server
  */
-export async function translateText(text: string, targetLanguage: string) {
+export async function translateText(text: string, targetLanguage: string): Promise<string> {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const response = await fetch("/api/translate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text, targetLanguage }),
+    });
 
-    const prompt = `
-      Translate the following text into ${targetLanguage}. 
-      Provide only the translated text and nothing else.
-      
-      Text to translate: "${text}"
-    `;
+    if (!response.ok) {
+      throw new Error(`Server returned status code: ${response.status}`);
+    }
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    return response.text().trim();
+    const data = await response.json();
+    return data.translation || "Translation error occurred.";
   } catch (error) {
-    console.error("Gemini Translation Error:", error);
+    console.error("Gemini Client-Side Fetch Error:", error);
     return "Translation error occurred.";
   }
 }

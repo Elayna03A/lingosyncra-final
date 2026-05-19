@@ -57,9 +57,11 @@ export default function ChatPage() {
     if (params.id) fetchChatData();
   }, [params.id]);
 
-  // 2. UPDATED REAL-TIME BROADCAST RECEIVER (Type-Safe Client-Side Filtering)
+  // 2. REAL-TIME BROADCAST RECEIVER (With Active Connection Debugging Logs)
   useEffect(() => {
     if (!params.id) return;
+
+    console.log("Starting Realtime channel subscription for chat room:", params.id);
 
     const channel = supabase
       .channel(`chat-room-channel-${params.id}`)
@@ -71,13 +73,16 @@ export default function ChatPage() {
           table: 'messages' 
         }, 
         (payload) => {
-          console.log('Realtime broadcast chunk caught:', payload);
+          console.log('⚡ REALTIME MESSAGE RECEIVED! Payload data:', payload);
           
-          // Type-cast the payload objects to 'any' so TypeScript allows reading .chat_id
           const newData = payload.new as any;
           const oldData = payload.old as any;
           
           const targetedChatId = newData?.chat_id || oldData?.chat_id;
+          
+          // Debugging log to confirm matching chat rooms
+          console.log(`Incoming chat_id: ${targetedChatId}, This page chat_id: ${params.id}`);
+
           if (String(targetedChatId) !== String(params.id)) return;
 
           if (payload.eventType === 'INSERT') {
@@ -92,11 +97,13 @@ export default function ChatPage() {
           }
         }
       )
-      .subscribe((status) => {
-        console.log("WebSocket Connection Pipeline Status:", status);
+      .subscribe((status, err) => {
+        console.log("📡 WebSocket Status Tracker:", status);
+        if (err) console.error("WebSocket Subscription Error details:", err);
       });
 
     return () => {
+      console.log("Cleaning up Realtime channel connection...");
       supabase.removeChannel(channel);
     };
   }, [params.id]);
@@ -107,7 +114,7 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
-  // 3. SEND MESSAGE LOGIC (Includes target_lang parameter field mapping)
+  // 3. SEND MESSAGE LOGIC (Robust Safe Fallbacks for Translation Failures)
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId) return;
 
@@ -115,28 +122,36 @@ export default function ChatPage() {
     const tempInputMessage = message;
     setMessage(""); 
 
+    let translated = "";
     try {
-      const translated = await translateText(tempInputMessage, targetLanguage);
-
-      const { error } = await supabase.from("messages").insert([
-        {
-          chat_id: params.id,
-          sender_id: currentUserId,
-          content: tempInputMessage,
-          translated_content: translated,
-          target_lang: selectedLangObj.code 
-        },
-      ]);
-
-      if (error) {
-        setMessage(tempInputMessage); 
-        toast.error("Message failed to send");
-        console.error(error);
+      console.log(`Attempting translation for language: ${targetLanguage}...`);
+      translated = await translateText(tempInputMessage, targetLanguage);
+      console.log("Translation Result From Gemini API:", translated);
+      
+      // Fallback check if translation came back empty or failed
+      if (!translated) {
+        translated = `[Translation to ${targetLanguage} processing...]`;
       }
     } catch (err) {
+      console.error("Gemini API Error caught during execution:", err);
+      translated = `[Translation error: missing configuration/API limit]`;
+    }
+
+    // Perform database insertion safely
+    const { error } = await supabase.from("messages").insert([
+      {
+        chat_id: params.id,
+        sender_id: currentUserId,
+        content: tempInputMessage,
+        translated_content: translated,
+        target_lang: selectedLangObj.code 
+      },
+    ]);
+
+    if (error) {
       setMessage(tempInputMessage); 
-      toast.error("Translation processing error");
-      console.error(err);
+      toast.error("Message failed to sync to server");
+      console.error("Supabase Database Insert Error:", error);
     }
   };
 
