@@ -34,7 +34,7 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 1. Initial Load Fetcher
+  // 1. Initial Load Fetcher (Only loads history, doesn't re-trigger translation API calls)
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -56,7 +56,6 @@ export default function ChatPage() {
         setContactName(activeName);
         setEditName(activeName);
 
-        // This tracks YOUR target viewing language preference
         const savedLangCode = isCurrentUserSender ? chatRow.user_1_lang : chatRow.user_2_lang;
         const matchedLang = languages.find(l => l.code === savedLangCode);
         if (matchedLang) setTargetLanguage(matchedLang.name);
@@ -73,7 +72,7 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Persist language selection down to db profiles dynamically
+  // Persist local selection changes down to db profiles dynamically
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
@@ -118,6 +117,7 @@ export default function ChatPage() {
     };
   }, [activeChatId]); 
 
+  // 3. SEND MESSAGE & TRIGGER TRANSLATION (ONE TIME ONLY)
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
@@ -130,14 +130,13 @@ export default function ChatPage() {
     const currentMeta = freshChat || chatMeta;
     const isMeUser1 = currentMeta.user_1 === currentUserId;
     
-    // FIX 1: Find the target language preference of the OPPOSING user who receives this message.
     const receiverLangCode = isMeUser1 ? (currentMeta.user_2_lang || 'en') : (currentMeta.user_1_lang || 'en');
     const receiverLangObj = languages.find(l => l.code === receiverLangCode) || { name: "English", code: "en" };
 
     const originalText = message;
     setMessage(""); 
 
-    // Insert original message immediately into db
+    // Insert original message with visible "Translating..." state
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
@@ -159,20 +158,11 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
-    // Optimistically push the message into our UI state right away so it displays fast
-    setMessages((prev) => [...prev, insertedMsg]);
-
     try {
-      // FIX 3: Sending explicit prompt instructions along with the payload to solve phonetic "Singlish" inputs
-      const enhancedPrompt = `Translate the following message into ${receiverLangObj.name}. Note: The source text might be written in standard layout or typed phonetically using an English keyboard (such as Singlish or Latin-script phonetic text like 'aybowan'). Translate what they mean contextually into natural, accurate ${receiverLangObj.name}. Output ONLY the clear translation content itself without any notes or conversational fluff: "${originalText}"`;
-
       const response = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          text: enhancedPrompt, 
-          targetLanguage: receiverLangObj.name 
-        }),
+        body: JSON.stringify({ text: originalText, targetLanguage: receiverLangObj.name }),
       });
 
       const resultData = await response.json();
@@ -180,16 +170,7 @@ export default function ChatPage() {
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
 
-        // Update UI locally
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === insertedMsg.id
-              ? { ...msg, translated_content: cleanTranslation }
-              : msg
-          )
-        );
-
-        // Persist final translation to database
+        // Save translation result to Supabase
         await supabase
           .from("messages")
           .update({ translated_content: cleanTranslation })
@@ -198,16 +179,8 @@ export default function ChatPage() {
         throw new Error(resultData.error || "API error");
       }
     } catch (err: any) {
-      console.error("Translation run background tracking failure:", err);
+      console.error("Translation processing failure:", err);
       const errorString = `[Translation Error: Failed to process]`;
-
-      setMessages((prev) =>
-        prev.map((msg) =>
-          msg.id === insertedMsg.id
-            ? { ...msg, translated_content: errorString }
-            : msg
-        )
-      );
 
       await supabase
         .from("messages")
@@ -301,16 +274,12 @@ export default function ChatPage() {
           const isMe = msg.sender_id === currentUserId;
           const isTranslating = msg.translated_content === "Translating...";
           const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
-          
-          // Determine valid translated context availability
           const hasTranslationText = msg.translated_content && !isTranslating && !isError;
 
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 
-                {/* FIX 2: Only show original text to the person who sent it. 
-                    Show the translated text to the receiver so the layout stays single-language per person. */}
                 {isMe ? (
                   <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 ) : (
