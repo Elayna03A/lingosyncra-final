@@ -21,6 +21,15 @@ export default function ChatPage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [chatMeta, setChatMeta] = useState<any>(null);
 
+  const languages = [
+    { name: "English", code: "en" },
+    { name: "සිංහල (Sinhala)", code: "si" },
+    { name: "தமிழ் (Tamil)", code: "ta" }
+  ];
+
+  // Resolve chat ID safely regardless of string/array parsing states
+  const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
+
   // 1. Initial Data Fetch (Identify Profile, Set Custom Nicknames & Load Past History)
   useEffect(() => {
     const fetchChatData = async () => {
@@ -32,7 +41,7 @@ export default function ChatPage() {
       const { data: chatRow } = await supabase
         .from('chats')
         .select('*')
-        .eq('id', params.id)
+        .eq('id', activeChatId)
         .single();
       
       if (chatRow && user) {
@@ -49,41 +58,35 @@ export default function ChatPage() {
       const { data: history } = await supabase
         .from('messages')
         .select('*')
-        .eq('chat_id', params.id)
+        .eq('chat_id', activeChatId)
         .order('created_at', { ascending: true });
       if (history) setMessages(history);
     };
 
-    if (params.id) fetchChatData();
-  }, [params.id]);
+    if (activeChatId) fetchChatData();
+  }, [activeChatId]);
 
-  // 2. REAL-TIME BROADCAST RECEIVER (With Active Connection Debugging Logs)
+  // 2. FIXED REAL-TIME BROADCAST RECEIVER (Filtered at Database Level)
   useEffect(() => {
-    if (!params.id) return;
+    if (!activeChatId) return;
 
-    console.log("Starting Realtime channel subscription for chat room:", params.id);
+    console.log("Starting Realtime channel subscription for chat room:", activeChatId);
 
     const channel = supabase
-      .channel(`chat-room-channel-${params.id}`)
+      .channel(`chat-room-${activeChatId}`)
       .on(
         'postgres_changes', 
         { 
           event: '*', 
           schema: 'public', 
-          table: 'messages' 
+          table: 'messages',
+          filter: `chat_id=eq.${activeChatId}` // Fix: Filters events on the server side instantly
         }, 
         (payload) => {
           console.log('⚡ REALTIME MESSAGE RECEIVED! Payload data:', payload);
           
           const newData = payload.new as any;
-          const oldData = payload.old as any;
           
-          const targetedChatId = newData?.chat_id || oldData?.chat_id;
-          
-          console.log(`Incoming chat_id: ${targetedChatId}, This page chat_id: ${params.id}`);
-
-          if (String(targetedChatId) !== String(params.id)) return;
-
           if (payload.eventType === 'INSERT') {
             setMessages((prev) => {
               if (prev.some(m => m.id === newData.id)) return prev;
@@ -105,33 +108,26 @@ export default function ChatPage() {
       console.log("Cleaning up Realtime channel connection...");
       supabase.removeChannel(channel);
     };
-  }, [params.id]);
-
-  const languages = [
-    { name: "English", code: "en" },
-    { name: "සිංහල (Sinhala)", code: "si" },
-    { name: "தமிழ் (Tamil)", code: "ta" }
-  ];
+  }, [activeChatId]);
 
   // 3. OPTIMIZED SEND LOGIC: Instantly saves and skips API for matching languages
   const handleSendMessage = async () => {
-    if (!message.trim() || !currentUserId) return;
+    if (!message.trim() || !currentUserId || !activeChatId) return;
 
     const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
     const tempInputMessage = message;
     
-    // 1. Clear input window instantly for great UI responsiveness
-    setMessage(""); 
+    setMessage(""); // Instantly clear input window for great UI responsiveness
 
-    // 2. If target language is English, we don't need to call the Gemini API at all!
+    // If target language is English, bypass the AI request completely
     if (targetLanguage === "English") {
       console.log("Target language is English. Skipping AI translation request.");
       const { error } = await supabase.from("messages").insert([
         {
-          chat_id: params.id,
+          chat_id: activeChatId,
           sender_id: currentUserId,
           content: tempInputMessage,
-          translated_content: tempInputMessage, // Just duplicate the content text
+          translated_content: tempInputMessage, 
           target_lang: selectedLangObj.code 
         },
       ]);
@@ -141,19 +137,19 @@ export default function ChatPage() {
         toast.error("Message failed to sync to server");
         console.error("Supabase Database Insert Error:", error);
       }
-      return; // Stop here, we are done!
+      return;
     }
 
-    // 3. If it's a foreign language (Sinhala/Tamil), save with a loading state first
+    // If it's a foreign language (Sinhala/Tamil), save with a transient loading state
     console.log("Saving original message to database instantly...");
     const { data: insertedMsg, error } = await supabase
       .from("messages")
       .insert([
         {
-          chat_id: params.id,
+          chat_id: activeChatId,
           sender_id: currentUserId,
           content: tempInputMessage,
-          translated_content: "Translating...", // Temporary placeholder text in DB
+          translated_content: "Translating...", 
           target_lang: selectedLangObj.code 
         },
       ])
@@ -167,13 +163,12 @@ export default function ChatPage() {
       return;
     }
 
-    // 4. Run the foreign translation in the background
+    // Run the foreign translation asynchronously in the background
     try {
       console.log(`Requesting background translation for: ${targetLanguage}...`);
       const translated = await translateText(tempInputMessage, targetLanguage);
       
-      // If the utility returned a server error code, handle it gracefully
-      const finalTranslation = translated.includes("Server Error") 
+      const finalTranslation = (translated && translated.includes("Server Error")) 
         ? "[Translation temporarily unavailable]" 
         : translated;
 
@@ -194,14 +189,8 @@ export default function ChatPage() {
     }
   };
 
-  const handleEdit = () => { 
-    setEditName(contactName); 
-    setIsEditing(true); 
-    setIsSettingsOpen(false); 
-  };
-
   const saveNewName = async () => {
-    if (!editName || !chatMeta || !currentUserId) return;
+    if (!editName || !chatMeta || !currentUserId || !activeChatId) return;
     
     const isUser1 = chatMeta.user_1 === currentUserId;
     const updatePayload = isUser1 
@@ -211,7 +200,7 @@ export default function ChatPage() {
     const { error } = await supabase
       .from('chats')
       .update(updatePayload)
-      .eq('id', params.id);
+      .eq('id', activeChatId);
 
     if (!error) { 
       setContactName(editName); 
@@ -222,13 +211,9 @@ export default function ChatPage() {
     }
   };
 
-  const handleDeleteClick = () => { 
-    setShowDeleteConfirm(true); 
-    setIsSettingsOpen(false); 
-  };
-
   const confirmDelete = async () => {
-    const { error } = await supabase.from('chats').delete().eq('id', params.id);
+    if (!activeChatId) return;
+    const { error } = await supabase.from('chats').delete().eq('id', activeChatId);
     if (!error) { 
       toast.success("Contact removed"); 
       router.push('/dashboard'); 
@@ -280,13 +265,13 @@ export default function ChatPage() {
           </button>
           {isSettingsOpen && (
             <div className="absolute right-0 mt-2 w-52 bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl z-50 overflow-hidden">
-              <button onClick={handleEdit} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-700 text-sm">
+              <button onClick={() => { setEditName(contactName); setIsEditing(true); setIsSettingsOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-700 text-sm">
                 <Edit2 size={16} className="text-blue-400" /> Edit Contact
               </button>
               <button onClick={handleDownloadXML} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-700 text-sm">
                 <Download size={16} className="text-emerald-400" /> Download XML
               </button>
-              <button onClick={handleDeleteClick} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-900/20 text-red-400 text-sm border-t border-slate-700">
+              <button onClick={() => { setShowDeleteConfirm(true); setIsSettingsOpen(false); }} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-red-900/20 text-red-400 text-sm border-t border-slate-700">
                 <Trash2 size={16} /> Delete Contact
               </button>
             </div>
@@ -304,17 +289,17 @@ export default function ChatPage() {
               <div className={`max-w-[80%] p-3 rounded-2xl ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 <p className="text-sm">{msg.content}</p>
                 {msg.translated_content === "Translating..." ? (
-  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
-    Translating message...
-  </p>
-) : msg.translated_content ? (
-  <>
-    <hr className="my-2 border-white/10" />
-    <p className="text-xs italic text-blue-100 flex items-center gap-1">
-      <Globe size={12} className="inline" /> {msg.translated_content}
-    </p>
-  </>
-) : null}
+                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
+                    Translating message...
+                  </p>
+                ) : msg.translated_content ? (
+                  <>
+                    <hr className="my-2 border-white/10" />
+                    <p className="text-xs italic text-blue-100 flex items-center gap-1">
+                      <Globe size={12} className="inline" /> {msg.translated_content}
+                    </p>
+                  </>
+                ) : null}
               </div>
             </div>
           );
