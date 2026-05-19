@@ -57,29 +57,44 @@ export default function ChatPage() {
     if (params.id) fetchChatData();
   }, [params.id]);
 
-  // 2. REAL-TIME EVENT STREAM LISTENER (Listens to both INSERT and UPDATE)
+  // 2. UPDATED REAL-TIME BROADCAST RECEIVER (Type-Safe Client-Side Filtering)
   useEffect(() => {
+    if (!params.id) return;
+
     const channel = supabase
-      .channel(`chat-${params.id}`)
+      .channel(`chat-room-channel-${params.id}`)
       .on(
         'postgres_changes', 
-        { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.id}` }, 
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'messages' 
+        }, 
         (payload) => {
-          console.log('Realtime Change Detected:', payload);
+          console.log('Realtime broadcast chunk caught:', payload);
           
+          // Type-cast the payload objects to 'any' so TypeScript allows reading .chat_id
+          const newData = payload.new as any;
+          const oldData = payload.old as any;
+          
+          const targetedChatId = newData?.chat_id || oldData?.chat_id;
+          if (String(targetedChatId) !== String(params.id)) return;
+
           if (payload.eventType === 'INSERT') {
             setMessages((prev) => {
-              if (prev.some(m => m.id === payload.new.id)) return prev;
-              return [...prev, payload.new];
+              if (prev.some(m => m.id === newData.id)) return prev;
+              return [...prev, newData];
             });
           } else if (payload.eventType === 'UPDATE') {
             setMessages((prev) => 
-              prev.map((msg) => msg.id === payload.new.id ? payload.new : msg)
+              prev.map((msg) => msg.id === newData.id ? newData : msg)
             );
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("WebSocket Connection Pipeline Status:", status);
+      });
 
     return () => {
       supabase.removeChannel(channel);
