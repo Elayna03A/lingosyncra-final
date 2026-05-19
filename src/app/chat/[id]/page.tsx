@@ -27,10 +27,10 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
-  // Resolve chat ID safely regardless of string/array parsing states
+  // Safely grab the chat ID string stringently
   const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
-  // 1. Initial Data Fetch (Identify Profile, Set Custom Nicknames & Load Past History)
+  // 1. Initial Data Fetch
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -66,25 +66,25 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // 2. FIXED REAL-TIME BROADCAST RECEIVER (Filtered at Database Level)
+  // 2. REAL-TIME BROADCAST RECEIVER (Strictly Filtered)
   useEffect(() => {
     if (!activeChatId) return;
 
-    console.log("Starting Realtime channel subscription for chat room:", activeChatId);
+    const safeChatId = String(activeChatId).trim();
+    console.log("Starting Realtime channel subscription for chat room:", safeChatId);
 
     const channel = supabase
-      .channel(`chat-room-${activeChatId}`)
+      .channel(`chat-room-${safeChatId}`)
       .on(
         'postgres_changes', 
         { 
           event: '*', 
           schema: 'public', 
           table: 'messages',
-          filter: `chat_id=eq.${activeChatId}` // Fix: Filters events on the server side instantly
+          filter: `chat_id=eq.${safeChatId}` 
         }, 
         (payload) => {
           console.log('⚡ REALTIME MESSAGE RECEIVED! Payload data:', payload);
-          
           const newData = payload.new as any;
           
           if (payload.eventType === 'INSERT') {
@@ -110,17 +110,17 @@ export default function ChatPage() {
     };
   }, [activeChatId]);
 
-  // 3. OPTIMIZED SEND LOGIC: Instantly saves and skips API for matching languages
+  // 3. SEND MESSAGE LOGIC
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId) return;
 
     const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
     const tempInputMessage = message;
     
-    setMessage(""); // Instantly clear input window for great UI responsiveness
+    setMessage(""); // Clear text bar immediately
 
-    // If target language is English, bypass the AI request completely
-    if (targetLanguage === "English") {
+    // Stop English-to-English translation attempts from calling the API route
+    if (targetLanguage.toLowerCase().trim() === "english") {
       console.log("Target language is English. Skipping AI translation request.");
       const { error } = await supabase.from("messages").insert([
         {
@@ -140,7 +140,7 @@ export default function ChatPage() {
       return;
     }
 
-    // If it's a foreign language (Sinhala/Tamil), save with a transient loading state
+    // Process foreign translations (Sinhala/Tamil)
     console.log("Saving original message to database instantly...");
     const { data: insertedMsg, error } = await supabase
       .from("messages")
@@ -159,11 +159,9 @@ export default function ChatPage() {
     if (error) {
       setMessage(tempInputMessage); 
       toast.error("Message failed to sync to server");
-      console.error("Supabase Database Insert Error:", error);
       return;
     }
 
-    // Run the foreign translation asynchronously in the background
     try {
       console.log(`Requesting background translation for: ${targetLanguage}...`);
       const translated = await translateText(tempInputMessage, targetLanguage);
@@ -191,23 +189,14 @@ export default function ChatPage() {
 
   const saveNewName = async () => {
     if (!editName || !chatMeta || !currentUserId || !activeChatId) return;
-    
     const isUser1 = chatMeta.user_1 === currentUserId;
-    const updatePayload = isUser1 
-      ? { user_2_name: editName } 
-      : { user_1_name: editName };
+    const updatePayload = isUser1 ? { user_2_name: editName } : { user_1_name: editName };
 
-    const { error } = await supabase
-      .from('chats')
-      .update(updatePayload)
-      .eq('id', activeChatId);
-
+    const { error } = await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
     if (!error) { 
       setContactName(editName); 
       setIsEditing(false); 
       toast.success("Display name saved!"); 
-    } else {
-      toast.error("Failed to update name");
     }
   };
 
