@@ -115,12 +115,12 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeChatId, messages]); // Added messages dependency here to ensure updates trigger visual changes immediately
+  }, [activeChatId]); 
 
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
-    // Fetch up-to-the-second details regarding the recipient's translation mode
+    // Fetch details regarding the recipient's configuration
     const { data: freshChat } = await supabase
       .from('chats')
       .select('*')
@@ -137,7 +137,7 @@ export default function ChatPage() {
     const originalText = message;
     setMessage(""); // Clear instantly for UI responsiveness
 
-    // If receiver reads English, bypass the translation API route completely!
+    // If receiver reads English, bypass the translation engine entirely
     if (receiverLangCode === 'en' || receiverLangObj.name.toLowerCase().includes("english")) {
       await supabase.from("messages").insert([
         {
@@ -151,8 +151,8 @@ export default function ChatPage() {
       return;
     }
 
-    // Insert original message with temporary "Translating..." placeholder state
-    const { data: insertedMsg, error } = await supabase
+    // Insert original message with temporary placeholder state
+    const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
         {
@@ -163,14 +163,15 @@ export default function ChatPage() {
           target_lang: receiverLangObj.code 
         },
       ])
-      .select()
-      .single();
+      .select();
 
-    if (error || !insertedMsg) {
+    if (insertError || !insertedData || insertedData.length === 0) {
       setMessage(originalText);
       toast.error("Message delivery failed");
       return;
     }
+
+    const insertedMsg = insertedData[0];
 
     // Trigger translate fetch API route in background
     try {
@@ -182,8 +183,7 @@ export default function ChatPage() {
 
       const resultData = await response.json();
 
-      console.log("API Response Status:", response.status);
-      console.log("API Result Data Received:", resultData);
+      console.log("Translation status details:", response.status, resultData);
 
       if (response.ok && resultData.translatedText) {
         await supabase
@@ -191,13 +191,13 @@ export default function ChatPage() {
           .update({ translated_content: resultData.translatedText.trim() })
           .eq("id", insertedMsg.id);
       } else {
-        throw new Error(resultData.error || "Translation API responded with error");
+        throw new Error(resultData.error || `Server route returned Status Code ${response.status}`);
       }
-    } catch (err) {
-console.error("Background AI run failed visually on console:", err);
+    } catch (err: any) {
+      console.error("Internal translation endpoint broke down:", err);
       await supabase
         .from("messages")
-        .update({ translated_content: "[Translation error occurred]" })
+        .update({ translated_content: `[Translation Error: ${err.message || "Failed to parse API output"}]` })
         .eq("id", insertedMsg.id);
     }
   };
@@ -285,23 +285,40 @@ console.error("Background AI run failed visually on console:", err);
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
         {messages.map((msg, index) => {
           const isMe = msg.sender_id === currentUserId;
+          
+          // Only show translation line if it exists, isn't loading, and differs from original text
+          const hasTranslation = msg.translated_content && 
+                                 msg.translated_content !== "Translating..." && 
+                                 msg.translated_content !== msg.content &&
+                                 !msg.translated_content.includes("[Translation Error:");
 
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[80%] p-3 rounded-2xl ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
-                <p className="text-sm">{msg.content}</p>
-                {msg.translated_content === "Translating..." ? (
-                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
-                    Translating message...
+              <div className={`max-w-[80%] p-3 rounded-2xl shadow-md ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
+                {/* Clean consistent layout bubble structure */}
+                <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
+                
+                {msg.translated_content === "Translating..." && (
+                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
+                     Translating message...
                   </p>
-                ) : msg.translated_content && msg.translated_content !== msg.content ? (
+                )}
+
+                {hasTranslation && (
                   <>
                     <hr className="my-2 border-white/10" />
-                    <p className="text-xs italic text-blue-100 flex items-center gap-1">
-                      <Globe size={12} className="inline" /> {msg.translated_content}
+                    <p className="text-xs italic text-blue-100 flex items-start gap-1 wrap-break-words whitespace-pre-wrap">
+                      <Globe size={12} className="mt-0.5 shrink-0 text-emerald-400" /> 
+                      <span>{msg.translated_content}</span>
                     </p>
                   </>
-                ) : null}
+                )}
+
+                {msg.translated_content && msg.translated_content.includes("[Translation Error:") && (
+                  <p className="text-[10px] text-red-400 italic mt-1 font-mono">
+                    {msg.translated_content}
+                  </p>
+                )}
               </div>
             </div>
           );
