@@ -24,13 +24,11 @@ export default function ChatPage() {
   // 1. Initial Data Fetch (Identify Profile, Set Custom Nicknames & Load Past History)
   useEffect(() => {
     const fetchChatData = async () => {
-      // Get the active session user identity first
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         setCurrentUserId(user.id);
       }
 
-      // Fetch Chat metadata using the updated columns
       const { data: chatRow } = await supabase
         .from('chats')
         .select('*')
@@ -39,17 +37,15 @@ export default function ChatPage() {
       
       if (chatRow && user) {
         setChatMeta(chatRow);
-        // Fallback checks mirroring your dashboard layout
         const isCurrentUserSender = chatRow.user_1 === user.id;
         const activeName = isCurrentUserSender 
-          ? (chatRow.user_1_name || "Chat Partner") 
-          : (chatRow.user_2_name || "Chat Partner");
+          ? (chatRow.user_2_name || "Chat Partner") 
+          : (chatRow.user_1_name || "Chat Partner");
         
         setContactName(activeName);
         setEditName(activeName);
       }
 
-      // Fetch Message History
       const { data: history } = await supabase
         .from('messages')
         .select('*')
@@ -61,16 +57,26 @@ export default function ChatPage() {
     if (params.id) fetchChatData();
   }, [params.id]);
 
-  // 2. REAL-TIME EVENT STREAM LISTENER
+  // 2. REAL-TIME EVENT STREAM LISTENER (Listens to both INSERT and UPDATE)
   useEffect(() => {
     const channel = supabase
       .channel(`chat-${params.id}`)
       .on(
         'postgres_changes', 
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.id}` }, 
+        { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${params.id}` }, 
         (payload) => {
-          console.log('New message received via WebSocket:', payload);
-          setMessages((prev) => [...prev, payload.new]);
+          console.log('Realtime Change Detected:', payload);
+          
+          if (payload.eventType === 'INSERT') {
+            setMessages((prev) => {
+              if (prev.some(m => m.id === payload.new.id)) return prev;
+              return [...prev, payload.new];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            setMessages((prev) => 
+              prev.map((msg) => msg.id === payload.new.id ? payload.new : msg)
+            );
+          }
         }
       )
       .subscribe();
@@ -86,26 +92,35 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
+  // 3. SEND MESSAGE LOGIC (Includes target_lang parameter field mapping)
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId) return;
 
+    const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
+    const tempInputMessage = message;
+    setMessage(""); 
+
     try {
-      const translated = await translateText(message, targetLanguage);
+      const translated = await translateText(tempInputMessage, targetLanguage);
 
       const { error } = await supabase.from("messages").insert([
         {
           chat_id: params.id,
           sender_id: currentUserId,
-          content: message,
+          content: tempInputMessage,
           translated_content: translated,
+          target_lang: selectedLangObj.code 
         },
       ]);
 
-      if (!error) {
-        setMessage(""); 
+      if (error) {
+        setMessage(tempInputMessage); 
+        toast.error("Message failed to send");
+        console.error(error);
       }
     } catch (err) {
-      toast.error("Translation failed");
+      setMessage(tempInputMessage); 
+      toast.error("Translation processing error");
       console.error(err);
     }
   };
@@ -119,11 +134,10 @@ export default function ChatPage() {
   const saveNewName = async () => {
     if (!editName || !chatMeta || !currentUserId) return;
     
-    // Check if current user is user_1 or user_2 to update the correct metadata slot
     const isUser1 = chatMeta.user_1 === currentUserId;
     const updatePayload = isUser1 
-      ? { user_1_name: editName } 
-      : { user_2_name: editName };
+      ? { user_2_name: editName } 
+      : { user_1_name: editName };
 
     const { error } = await supabase
       .from('chats')
@@ -172,6 +186,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-white">
+      {/* Header */}
       <header className="p-4 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button onClick={() => router.back()} className="p-2 hover:bg-slate-700 rounded-full transition-colors">
@@ -179,7 +194,7 @@ export default function ChatPage() {
           </button>
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-full bg-linear-to-tr from-blue-500 to-emerald-500 flex items-center justify-center font-bold uppercase">
-             {contactName ? contactName[0] : "U"}          
+              {contactName ? contactName[0] : "U"}          
             </div>
             <div>
               <h2 className="font-bold text-lg leading-tight">{contactName}</h2>
@@ -210,23 +225,26 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* FIXED MESSAGE CONTAINERS ALIGNMENT SLOTS */}
+      {/* Messages Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
         {messages.map((msg, index) => {
-          // Compare against current user ID instead of route parameter token string!
           const isMe = msg.sender_id === currentUserId;
 
           return (
-            <div key={index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+            <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 <p className="text-sm">{msg.content}</p>
-                {msg.translated_content && (
+                {msg.translated_content ? (
                   <>
                     <hr className="my-2 border-white/10" />
                     <p className="text-xs italic text-blue-100 flex items-center gap-1">
                       <Globe size={12} className="inline" /> {msg.translated_content}
                     </p>
                   </>
+                ) : (
+                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
+                    Translating message...
+                  </p>
                 )}
               </div>
             </div>
@@ -234,6 +252,7 @@ export default function ChatPage() {
         })}
       </div>
 
+      {/* Footer Interface */}
       <footer className="p-4 bg-slate-800 border-t border-slate-700">
         <div className="max-w-4xl mx-auto flex flex-col gap-2">
           <div className="flex gap-2 items-end">
@@ -255,7 +274,8 @@ export default function ChatPage() {
             </div>
             <input type="text" placeholder={`Type in ${targetLanguage}...`}
               className="flex-1 bg-slate-900 border border-slate-700 p-3.5 rounded-2xl outline-none focus:border-blue-500 text-sm"
-              value={message} onChange={(e) => setMessage(e.target.value)} />
+              value={message} onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSendMessage(); }} />
             <button onClick={handleSendMessage} className="bg-blue-600 hover:bg-blue-500 p-3.5 rounded-2xl transition-all">
               <Send size={20} />
             </button>
