@@ -27,7 +27,6 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
-  // Safely grab the chat ID string stringently
   const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
   // 1. Initial Data Fetch
@@ -53,6 +52,11 @@ export default function ChatPage() {
         
         setContactName(activeName);
         setEditName(activeName);
+
+        // Load this user's previously saved language preference
+        const savedLangCode = isCurrentUserSender ? chatRow.user_1_lang : chatRow.user_2_lang;
+        const matchedLang = languages.find(l => l.code === savedLangCode);
+        if (matchedLang) setTargetLanguage(matchedLang.name);
       }
 
       const { data: history } = await supabase
@@ -66,25 +70,34 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // 2. REAL-TIME BROADCAST RECEIVER (Strictly Filtered)
+  // Update language preference in the database whenever the dropdown changes
+  const handleLanguageChange = async (langName: string, langCode: string) => {
+    setTargetLanguage(langName);
+    setIsLangMenuOpen(false);
+
+    if (!chatMeta || !currentUserId) return;
+
+    const isUser1 = chatMeta.user_1 === currentUserId;
+    const updatePayload = isUser1 ? { user_1_lang: langCode } : { user_2_lang: langCode };
+
+    await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
+    
+    // Refresh local chatMeta to keep track of current database status
+    setChatMeta((prev: any) => ({ ...prev, ...updatePayload }));
+  };
+
+  // 2. REAL-TIME BROADCAST RECEIVER
   useEffect(() => {
     if (!activeChatId) return;
 
     const safeChatId = String(activeChatId).trim();
-    console.log("Starting Realtime channel subscription for chat room:", safeChatId);
 
     const channel = supabase
       .channel(`chat-room-${safeChatId}`)
       .on(
         'postgres_changes', 
-        { 
-          event: '*', 
-          schema: 'public', 
-          table: 'messages',
-          filter: `chat_id=eq.${safeChatId}` 
-        }, 
+        { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${safeChatId}` }, 
         (payload) => {
-          console.log('⚡ REALTIME MESSAGE RECEIVED! Payload data:', payload);
           const newData = payload.new as any;
           
           if (payload.eventType === 'INSERT') {
@@ -99,49 +112,49 @@ export default function ChatPage() {
           }
         }
       )
-      .subscribe((status, err) => {
-        console.log("📡 WebSocket Status Tracker:", status);
-        if (err) console.error("WebSocket Subscription Error details:", err);
-      });
+      .subscribe();
 
     return () => {
-      console.log("Cleaning up Realtime channel connection...");
       supabase.removeChannel(channel);
     };
   }, [activeChatId]);
 
-  // 3. SEND MESSAGE LOGIC
+  // 3. SEND MESSAGE LOGIC (Translates for the Receiver!)
   const handleSendMessage = async () => {
-    if (!message.trim() || !currentUserId || !activeChatId) return;
+    if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
-    const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
-    const tempInputMessage = message;
+    // Fetch the latest chat record to check the partner's absolute newest language setting
+    const { data: freshChat } = await supabase
+      .from('chats')
+      .select('*')
+      .eq('id', activeChatId)
+      .single();
+
+    const actualChatMeta = freshChat || chatMeta;
+    const isMeUser1 = actualChatMeta.user_1 === currentUserId;
     
-    setMessage(""); // Clear text bar immediately
+    // Crucial Change: Find what language the RECEIVER wants to read
+    const receiverLangCode = isMeUser1 ? (actualChatMeta.user_2_lang || 'en') : (actualChatMeta.user_1_lang || 'en');
+    const receiverLangObj = languages.find(l => l.code === receiverLangCode) || { name: "English", code: "en" };
 
-    // Stop English-to-English translation attempts from calling the API route
-    if (targetLanguage.toLowerCase().trim() === "english") {
-      console.log("Target language is English. Skipping AI translation request.");
-      const { error } = await supabase.from("messages").insert([
+    const tempInputMessage = message;
+    setMessage(""); 
+
+    // If the receiver's preference is English, no translation API call is needed!
+    if (receiverLangObj.name.toLowerCase().trim() === "english") {
+      await supabase.from("messages").insert([
         {
           chat_id: activeChatId,
           sender_id: currentUserId,
           content: tempInputMessage,
           translated_content: tempInputMessage, 
-          target_lang: selectedLangObj.code 
+          target_lang: receiverLangObj.code 
         },
       ]);
-
-      if (error) {
-        setMessage(tempInputMessage); 
-        toast.error("Message failed to sync to server");
-        console.error("Supabase Database Insert Error:", error);
-      }
       return;
     }
 
-    // Process foreign translations (Sinhala/Tamil)
-    console.log("Saving original message to database instantly...");
+    // Insert message with initial placeholder status
     const { data: insertedMsg, error } = await supabase
       .from("messages")
       .insert([
@@ -150,7 +163,7 @@ export default function ChatPage() {
           sender_id: currentUserId,
           content: tempInputMessage,
           translated_content: "Translating...", 
-          target_lang: selectedLangObj.code 
+          target_lang: receiverLangObj.code 
         },
       ])
       .select()
@@ -158,16 +171,16 @@ export default function ChatPage() {
 
     if (error) {
       setMessage(tempInputMessage); 
-      toast.error("Message failed to sync to server");
+      toast.error("Message failed to send");
       return;
     }
 
     try {
-      console.log(`Requesting background translation for: ${targetLanguage}...`);
-      const translated = await translateText(tempInputMessage, targetLanguage);
+      // Pass the receiver's target language right into the translator
+      const translated = await translateText(tempInputMessage, receiverLangObj.name);
       
       const finalTranslation = (translated && translated.includes("Server Error")) 
-        ? "[Translation temporarily unavailable]" 
+        ? "[Translation unavailable]" 
         : translated;
 
       if (insertedMsg) {
@@ -177,7 +190,7 @@ export default function ChatPage() {
           .eq("id", insertedMsg.id);
       }
     } catch (err) {
-      console.error("Background translation execution crashed:", err);
+      console.error("Translation run crash:", err);
       if (insertedMsg) {
         await supabase
           .from("messages")
@@ -211,9 +224,7 @@ export default function ChatPage() {
 
   const handleDownloadXML = () => {
     try {
-      const xmlHeader = `<?xml version="1.0" encoding="UTF-8"?>\n<chat>\n`;
-      const xmlFooter = `\n</chat>`;
-      const content = `${xmlHeader}   <info>Chat history with ${contactName}</info>${xmlFooter}`;
+      const content = `<?xml version="1.0" encoding="UTF-8"?>\n<chat><info>Chat history with ${contactName}</info></chat>`;
       const blob = new Blob([content], { type: "text/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -242,7 +253,7 @@ export default function ChatPage() {
             <div>
               <h2 className="font-bold text-lg leading-tight">{contactName}</h2>
               <p className="text-[10px] text-emerald-400 font-medium tracking-wider uppercase">
-                Current Language: {targetLanguage} 
+                MY TRANSLATION TARGET: {targetLanguage} 
               </p>
             </div>
           </div>
@@ -281,7 +292,7 @@ export default function ChatPage() {
                   <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
                     Translating message...
                   </p>
-                ) : msg.translated_content ? (
+                ) : msg.translated_content && msg.translated_content !== msg.content ? (
                   <>
                     <hr className="my-2 border-white/10" />
                     <p className="text-xs italic text-blue-100 flex items-center gap-1">
@@ -303,7 +314,7 @@ export default function ChatPage() {
               {isLangMenuOpen && (
                 <div className="absolute bottom-full mb-2 left-0 w-40 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50">
                   {languages.map((lang) => (
-                    <button key={lang.code} onClick={() => { setTargetLanguage(lang.name); setIsLangMenuOpen(false); }}
+                    <button key={lang.code} onClick={() => handleLanguageChange(lang.name, lang.code)}
                       className={`w-full text-left px-4 py-3 text-xs hover:bg-slate-700 ${targetLanguage === lang.name ? 'text-blue-400 font-bold' : 'text-slate-300'}`}>
                       {lang.name}
                     </button>
@@ -315,7 +326,7 @@ export default function ChatPage() {
                 <ChevronUp size={16} className={isLangMenuOpen ? 'rotate-180' : ''} />
               </button>
             </div>
-            <input type="text" placeholder={`Type in ${targetLanguage}...`}
+            <input type="text" placeholder="Type a message..."
               className="flex-1 bg-slate-900 border border-slate-700 p-3.5 rounded-2xl outline-none focus:border-blue-500 text-sm"
               value={message} onChange={(e) => setMessage(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleSendMessage(); }} />
@@ -326,7 +337,7 @@ export default function ChatPage() {
         </div>
       </footer>
 
-      {/* Edit Modal */}
+      {/* Modals */}
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
@@ -341,7 +352,6 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
