@@ -113,17 +113,38 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
-  // 3. UPDATED LOGIC: Instant local delivery that completely ignores translation bugs!
+  // 3. OPTIMIZED SEND LOGIC: Instantly saves and skips API for matching languages
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId) return;
 
     const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
     const tempInputMessage = message;
     
-    // 1. Clear input field instantly so the UI feels fast and responsive
+    // 1. Clear input window instantly for great UI responsiveness
     setMessage(""); 
 
-    // 2. Save the message to Supabase IMMEDIATELY
+    // 2. If target language is English, we don't need to call the Gemini API at all!
+    if (targetLanguage === "English") {
+      console.log("Target language is English. Skipping AI translation request.");
+      const { error } = await supabase.from("messages").insert([
+        {
+          chat_id: params.id,
+          sender_id: currentUserId,
+          content: tempInputMessage,
+          translated_content: tempInputMessage, // Just duplicate the content text
+          target_lang: selectedLangObj.code 
+        },
+      ]);
+
+      if (error) {
+        setMessage(tempInputMessage); 
+        toast.error("Message failed to sync to server");
+        console.error("Supabase Database Insert Error:", error);
+      }
+      return; // Stop here, we are done!
+    }
+
+    // 3. If it's a foreign language (Sinhala/Tamil), save with a loading state first
     console.log("Saving original message to database instantly...");
     const { data: insertedMsg, error } = await supabase
       .from("messages")
@@ -132,7 +153,7 @@ export default function ChatPage() {
           chat_id: params.id,
           sender_id: currentUserId,
           content: tempInputMessage,
-          translated_content: "", // Start blank, background process will fill this
+          translated_content: "Translating...", // Temporary placeholder text in DB
           target_lang: selectedLangObj.code 
         },
       ])
@@ -143,23 +164,33 @@ export default function ChatPage() {
       setMessage(tempInputMessage); 
       toast.error("Message failed to sync to server");
       console.error("Supabase Database Insert Error:", error);
-      return; // Stop execution if database insert fails
+      return;
     }
 
-    // 3. Run the translation safely in the background after saving
+    // 4. Run the foreign translation in the background
     try {
-      console.log(`Requesting translation in background...`);
+      console.log(`Requesting background translation for: ${targetLanguage}...`);
       const translated = await translateText(tempInputMessage, targetLanguage);
       
-      if (translated && insertedMsg) {
-        // Update the message row with the real translation once it's done
+      // If the utility returned a server error code, handle it gracefully
+      const finalTranslation = translated.includes("Server Error") 
+        ? "[Translation temporarily unavailable]" 
+        : translated;
+
+      if (insertedMsg) {
         await supabase
           .from("messages")
-          .update({ translated_content: translated })
+          .update({ translated_content: finalTranslation || "[Translation missing]" })
           .eq("id", insertedMsg.id);
       }
     } catch (err) {
-      console.error("Background translation crashed:", err);
+      console.error("Background translation execution crashed:", err);
+      if (insertedMsg) {
+        await supabase
+          .from("messages")
+          .update({ translated_content: "[Translation error occurred]" })
+          .eq("id", insertedMsg.id);
+      }
     }
   };
 
@@ -272,18 +303,18 @@ export default function ChatPage() {
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 <p className="text-sm">{msg.content}</p>
-                {msg.translated_content ? (
-                  <>
-                    <hr className="my-2 border-white/10" />
-                    <p className="text-xs italic text-blue-100 flex items-center gap-1">
-                      <Globe size={12} className="inline" /> {msg.translated_content}
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
-                    Translating message...
-                  </p>
-                )}
+                {msg.translated_content === "Translating..." ? (
+  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse">
+    Translating message...
+  </p>
+) : msg.translated_content ? (
+  <>
+    <hr className="my-2 border-white/10" />
+    <p className="text-xs italic text-blue-100 flex items-center gap-1">
+      <Globe size={12} className="inline" /> {msg.translated_content}
+    </p>
+  </>
+) : null}
               </div>
             </div>
           );
