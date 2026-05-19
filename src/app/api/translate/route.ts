@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic"; // Forces Next.js to look up environment keys live on every single request
+
 import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
