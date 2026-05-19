@@ -34,7 +34,7 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 1. Initial Load Fetcher (Only loads history, doesn't re-trigger translation API calls)
+  // 1. Initial Load Fetcher (Only loads history)
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -72,7 +72,7 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Persist local selection changes down to db profiles dynamically
+  // Persist language target selection changes
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
@@ -117,7 +117,7 @@ export default function ChatPage() {
     };
   }, [activeChatId]); 
 
-  // 3. SEND MESSAGE & TRIGGER TRANSLATION (ONE TIME ONLY)
+  // 3. SEND MESSAGE & IMMEDIATE STATE INJECTION
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
@@ -158,6 +158,9 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
+    // Optimistically put the blank placeholder row into state immediately 
+    setMessages((prev) => [...prev, insertedMsg]);
+
     try {
       const response = await fetch("/api/translate", {
         method: "POST",
@@ -170,7 +173,16 @@ export default function ChatPage() {
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
 
-        // Save translation result to Supabase
+        // FIX: Force immediate frontend state update so the text updates instantly!
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === insertedMsg.id
+              ? { ...msg, translated_content: cleanTranslation }
+              : msg
+          )
+        );
+
+        // Save translation result quietly to Supabase
         await supabase
           .from("messages")
           .update({ translated_content: cleanTranslation })
@@ -181,6 +193,14 @@ export default function ChatPage() {
     } catch (err: any) {
       console.error("Translation processing failure:", err);
       const errorString = `[Translation Error: Failed to process]`;
+
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === insertedMsg.id
+            ? { ...msg, translated_content: errorString }
+            : msg
+        )
+      );
 
       await supabase
         .from("messages")
