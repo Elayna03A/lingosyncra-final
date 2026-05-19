@@ -13,31 +13,32 @@ export async function POST(request: Request) {
 
     const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
     if (!apiKey) {
-      console.error("Missing critical environment configuration variable: NEXT_PUBLIC_GEMINI_API_KEY");
-      return NextResponse.json({ error: "Server Error: Translation service configuration key missing." }, { status: 500 });
+      return NextResponse.json({ error: "Server Error: Translation configuration key missing." }, { status: 500 });
     }
 
-    // Initialize using the correct authentication configuration mapping
+    // 1. Correct modern SDK structural initialization 
     const ai = new GoogleGenAI({ apiKey: apiKey });
 
-    // Using the stable, universally supported production model name string
+    // 2. Explicitly target the core model instance
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Translate the following text accurately into ${targetLanguage}. Do not return anything else except the raw translated text content result string itself:\n\n"${text}"`,
+      contents: `Translate the following text accurately into ${targetLanguage}. Do not return anything else except the raw translated text content string itself:\n\n"${text}"`,
     });
 
     const translatedResultText = response.text || "";
 
     if (!translatedResultText) {
-      throw new Error("Empty response received from Gemini model generation endpoint");
+      throw new Error("Empty response object received from generation endpoint");
     }
 
     return NextResponse.json({ translatedText: translatedResultText.trim() });
   } catch (error: any) {
-    // This logs the exact hidden engine issue to your Vercel Dashboard Logs tab
-    console.error("Detailed Gemini API Handshake breakdown:", error);
+    // This will print the precise underlying technical issue directly into your Vercel Dashboard logs
+    console.error("Detailed Gemini Handshake Exception:", error);
+    
+    // This sends the precise breakdown message back to your browser console so you can see it live!
     return NextResponse.json(
-      { error: `Server Error: Translation generation instance broke down. Details: ${error.message || error}` },
+      { error: `Server Error: Translation generation broke down. Detail: ${error.message || error}` },
       { status: 500 }
     );
   }
