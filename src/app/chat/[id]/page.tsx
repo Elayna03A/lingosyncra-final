@@ -85,7 +85,7 @@ export default function ChatPage() {
     setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
   };
 
-  // 2. RESILIENT REAL-TIME BROADCAST LISTENER
+  // 2. REAL-TIME BROADCAST LISTENER
   useEffect(() => {
     if (!activeChatId) return;
     const safeChatId = String(activeChatId).trim();
@@ -120,7 +120,6 @@ export default function ChatPage() {
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
-    // Fetch details regarding the recipient's configuration
     const { data: freshChat } = await supabase
       .from('chats')
       .select('*')
@@ -130,14 +129,14 @@ export default function ChatPage() {
     const currentMeta = freshChat || chatMeta;
     const isMeUser1 = currentMeta.user_1 === currentUserId;
     
-    // Find target language based on what the OTHER user has chosen
+    // Target language configuration of the opposing user receiving this message
     const receiverLangCode = isMeUser1 ? (currentMeta.user_2_lang || 'en') : (currentMeta.user_1_lang || 'en');
     const receiverLangObj = languages.find(l => l.code === receiverLangCode) || { name: "English", code: "en" };
 
     const originalText = message;
-    setMessage(""); // Clear instantly for UI responsiveness
+    setMessage(""); 
 
-    // If receiver reads English, bypass the translation engine entirely
+    // If recipient has English selected, insert instantly and skip translator
     if (receiverLangCode === 'en' || receiverLangObj.name.toLowerCase().includes("english")) {
       await supabase.from("messages").insert([
         {
@@ -151,7 +150,7 @@ export default function ChatPage() {
       return;
     }
 
-    // Insert original message with temporary placeholder state
+    // Insert original message with visible "Translating..." state
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
@@ -173,7 +172,6 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
-    // Trigger translate fetch API route in background
     try {
       const response = await fetch("/api/translate", {
         method: "POST",
@@ -183,21 +181,19 @@ export default function ChatPage() {
 
       const resultData = await response.json();
 
-      console.log("Translation status details:", response.status, resultData);
-
       if (response.ok && resultData.translatedText) {
         await supabase
           .from("messages")
           .update({ translated_content: resultData.translatedText.trim() })
           .eq("id", insertedMsg.id);
       } else {
-        throw new Error(resultData.error || `Server route returned Status Code ${response.status}`);
+        throw new Error(resultData.error || "API error");
       }
     } catch (err: any) {
-      console.error("Internal translation endpoint broke down:", err);
+      console.error("Translation run background tracking failure:", err);
       await supabase
         .from("messages")
-        .update({ translated_content: `[Translation Error: ${err.message || "Failed to parse API output"}]` })
+        .update({ translated_content: "[Translation error occurred]" })
         .eq("id", insertedMsg.id);
     }
   };
@@ -286,25 +282,29 @@ export default function ChatPage() {
         {messages.map((msg, index) => {
           const isMe = msg.sender_id === currentUserId;
           
-          // Only show translation line if it exists, isn't loading, and differs from original text
-          const hasTranslation = msg.translated_content && 
-                                 msg.translated_content !== "Translating..." && 
-                                 msg.translated_content !== msg.content &&
-                                 !msg.translated_content.includes("[Translation Error:");
+          // Determine if translation line is necessary to render for the viewer
+          const isTranslating = msg.translated_content === "Translating...";
+          const isError = msg.translated_content === "[Translation error occurred]";
+          const hasTranslationText = msg.translated_content && 
+                                     !isTranslating && 
+                                     !isError && 
+                                     msg.translated_content !== msg.content;
 
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[80%] p-3 rounded-2xl shadow-md ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
-                {/* Clean consistent layout bubble structure */}
+              <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
+                {/* Original Message Text */}
                 <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 
-                {msg.translated_content === "Translating..." && (
+                {/* Loading State Animation */}
+                {isTranslating && (
                   <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
                      Translating message...
                   </p>
                 )}
 
-                {hasTranslation && (
+                {/* Clean inline formatted translated view block */}
+                {hasTranslationText && (
                   <>
                     <hr className="my-2 border-white/10" />
                     <p className="text-xs italic text-blue-100 flex items-start gap-1 wrap-break-words whitespace-pre-wrap">
@@ -314,8 +314,9 @@ export default function ChatPage() {
                   </>
                 )}
 
-                {msg.translated_content && msg.translated_content.includes("[Translation Error:") && (
-                  <p className="text-[10px] text-red-400 italic mt-1 font-mono">
+                {/* Error Banner Fallback */}
+                {isError && (
+                  <p className="text-[10px] text-red-400 italic mt-1">
                     {msg.translated_content}
                   </p>
                 )}
@@ -357,7 +358,7 @@ export default function ChatPage() {
         </div>
       </footer>
 
-      {/* Modals placeholders */}
+      {/* Modals */}
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
