@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// This runs strictly on the secure server side on Vercel
-const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GEMINI_API_KEY!);
+// Securely runs on the server side using whichever variable key variant is present
+const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey || "");
 
 export async function POST(request: Request) {
   try {
@@ -10,6 +11,11 @@ export async function POST(request: Request) {
 
     if (!text || !targetLanguage) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+
+    if (!apiKey) {
+      console.error("Gemini Key Error: API key is completely missing on server variables.");
+      return NextResponse.json({ error: "API key configuration missing" }, { status: 500 });
     }
 
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });

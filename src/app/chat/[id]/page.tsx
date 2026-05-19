@@ -80,7 +80,6 @@ export default function ChatPage() {
           
           const targetedChatId = newData?.chat_id || oldData?.chat_id;
           
-          // Debugging log to confirm matching chat rooms
           console.log(`Incoming chat_id: ${targetedChatId}, This page chat_id: ${params.id}`);
 
           if (String(targetedChatId) !== String(params.id)) return;
@@ -114,36 +113,30 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
-  // 3. SEND MESSAGE LOGIC (Robust Safe Fallbacks for Translation Failures)
+  // 3. UPDATED BULLETPROOF SEND LOGIC (Instant Local Delivery)
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId) return;
 
     const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
     const tempInputMessage = message;
-    setMessage(""); 
+    setMessage(""); // Instantly clear input window for responsiveness
 
     let translated = "";
     try {
-      console.log(`Attempting translation for language: ${targetLanguage}...`);
+      console.log(`Sending text to secure internal translation proxy...`);
       translated = await translateText(tempInputMessage, targetLanguage);
-      console.log("Translation Result From Gemini API:", translated);
-      
-      // Fallback check if translation came back empty or failed
-      if (!translated) {
-        translated = `[Translation to ${targetLanguage} processing...]`;
-      }
     } catch (err) {
-      console.error("Gemini API Error caught during execution:", err);
-      translated = `[Translation error: missing configuration/API limit]`;
+      console.error("Translation server connection timed out/failed:", err);
+      translated = "[Translation temporarily unavailable]";
     }
 
-    // Perform database insertion safely
+    // Database interaction runs smoothly even if your API key or route hits a snag
     const { error } = await supabase.from("messages").insert([
       {
         chat_id: params.id,
         sender_id: currentUserId,
         content: tempInputMessage,
-        translated_content: translated,
+        translated_content: translated || "[Translation processing breakdown]",
         target_lang: selectedLangObj.code 
       },
     ]);
