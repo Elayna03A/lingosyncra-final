@@ -1,50 +1,60 @@
 import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
 
-// Initialize the Google GenAI SDK with your environment API key
-const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
-
 export async function POST(request: Request) {
   try {
     const { text, targetLanguage } = await request.json();
 
-    // 1. Validation guard check
+    // 1. Guard checks
     if (!text || !targetLanguage) {
       return NextResponse.json(
-        { error: "Missing required fields: text or targetLanguage name strings." },
+        { error: "Missing text or targetLanguage strings." },
         { status: 400 }
       );
     }
 
-    // 2. Clean up the target language string so the AI instructions stay pristine.
-    // This turns strings like "සිංහල (Sinhala)" or "தமிழ் (Tamil)" into clear identifiers.
-    let cleanLanguage = targetLanguage;
-    if (targetLanguage.toLowerCase().includes("sinhala")) {
-      cleanLanguage = "Sinhala";
-    } else if (targetLanguage.toLowerCase().includes("tamil")) {
-      cleanLanguage = "Tamil";
-    } else if (targetLanguage.toLowerCase().includes("english")) {
-      cleanLanguage = "English";
+    // 2. Safely grab your API key from the environment
+    // It checks both variants just to be completely safe!
+    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+
+    if (!apiKey) {
+      console.error("CRITICAL CONFIG ERROR: Gemini API key is completely missing from Vercel/environment variables.");
+      return NextResponse.json(
+        { error: "Server authentication misconfigured. API Key not found." },
+        { status: 501 }
+      );
     }
 
-    // 3. Request translation content generation from gemini-2.5-flash
+    // 3. Initialize the client using the correct @google/genai package format
+    const ai = new GoogleGenAI({ apiKey: apiKey });
+
+    // 4. Map the frontend display names to clean instructions for the AI
+    let cleanLanguage = "English";
+    const lowerLang = targetLanguage.toLowerCase();
+    
+    if (lowerLang.includes("sinhala") || lowerLang === "si") {
+      cleanLanguage = "Sinhala";
+    } else if (lowerLang.includes("tamil") || lowerLang === "ta") {
+      cleanLanguage = "Tamil";
+    }
+
+    // 5. Generate content using the proper SDK syntax
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Translate the following text strictly into ${cleanLanguage}. Do not add any conversational remarks, commentary, introductions, markdown styling, or extra explanations. Only return the exact translated text.\n\nText to translate:\n"${text}"`,
+      contents: `Translate the following text strictly into ${cleanLanguage}. Do not add any conversational remarks, commentary, introductions, markdown formatting, or extra explanations. Only return the exact translated text.\n\nText to translate:\n"${text}"`,
     });
 
     const translatedText = response.text?.trim();
 
-    // 4. Ensure response is valid before passing back down to user UI instance
     if (!translatedText) {
-      throw new Error("Gemini returned an empty response string.");
+      throw new Error("Gemini returned an empty translation response string.");
     }
 
     return NextResponse.json({ translatedText });
   } catch (error: any) {
     console.error("Translation API Route Error Handler Logging:", error);
     return NextResponse.json(
-      { error: error.message || "Internal translation generation failure." },
+      { error: error.message || "Internal server translation failure." },
       { status: 500 }
     );
   }
