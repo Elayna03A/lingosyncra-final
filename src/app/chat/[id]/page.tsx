@@ -182,6 +182,9 @@ export default function ChatPage() {
 
       const resultData = await response.json();
 
+      console.log("API Response Status:", response.status);
+      console.log("API Result Data Received:", resultData);
+
       if (response.ok && resultData.translatedText) {
         await supabase
           .from("messages")
@@ -191,7 +194,7 @@ export default function ChatPage() {
         throw new Error(resultData.error || "Translation API responded with error");
       }
     } catch (err) {
-      console.error("Background AI run failed:", err);
+console.error("Background AI run failed visually on console:", err);
       await supabase
         .from("messages")
         .update({ translated_content: "[Translation error occurred]" })
