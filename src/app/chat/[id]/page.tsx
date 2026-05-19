@@ -56,6 +56,7 @@ export default function ChatPage() {
         setContactName(activeName);
         setEditName(activeName);
 
+        // This tracks YOUR target viewing language preference
         const savedLangCode = isCurrentUserSender ? chatRow.user_1_lang : chatRow.user_2_lang;
         const matchedLang = languages.find(l => l.code === savedLangCode);
         if (matchedLang) setTargetLanguage(matchedLang.name);
@@ -72,7 +73,7 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Persist local selection changes down to db profiles dynamically
+  // Persist language selection down to db profiles dynamically
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
@@ -129,28 +130,14 @@ export default function ChatPage() {
     const currentMeta = freshChat || chatMeta;
     const isMeUser1 = currentMeta.user_1 === currentUserId;
     
-    // Target language configuration of the opposing user receiving this message
+    // FIX 1: Find the target language preference of the OPPOSING user who receives this message.
     const receiverLangCode = isMeUser1 ? (currentMeta.user_2_lang || 'en') : (currentMeta.user_1_lang || 'en');
     const receiverLangObj = languages.find(l => l.code === receiverLangCode) || { name: "English", code: "en" };
 
     const originalText = message;
     setMessage(""); 
 
-    // If recipient has English selected, insert instantly and skip translator
-    if (receiverLangCode === 'en' || receiverLangObj.name.toLowerCase().includes("english")) {
-      await supabase.from("messages").insert([
-        {
-          chat_id: activeChatId,
-          sender_id: currentUserId,
-          content: originalText,
-          translated_content: originalText, 
-          target_lang: 'en'
-        },
-      ]);
-      return;
-    }
-
-    // Insert original message with visible "Translating..." state
+    // Insert original message immediately into db
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
@@ -172,11 +159,20 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
+    // Optimistically push the message into our UI state right away so it displays fast
+    setMessages((prev) => [...prev, insertedMsg]);
+
     try {
+      // FIX 3: Sending explicit prompt instructions along with the payload to solve phonetic "Singlish" inputs
+      const enhancedPrompt = `Translate the following message into ${receiverLangObj.name}. Note: The source text might be written in standard layout or typed phonetically using an English keyboard (such as Singlish or Latin-script phonetic text like 'aybowan'). Translate what they mean contextually into natural, accurate ${receiverLangObj.name}. Output ONLY the clear translation content itself without any notes or conversational fluff: "${originalText}"`;
+
       const response = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: originalText, targetLanguage: receiverLangObj.name }),
+        body: JSON.stringify({ 
+          text: enhancedPrompt, 
+          targetLanguage: receiverLangObj.name 
+        }),
       });
 
       const resultData = await response.json();
@@ -184,7 +180,7 @@ export default function ChatPage() {
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
 
-        // CHANGE 1: Update local screen state directly for immediate visual feedback
+        // Update UI locally
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === insertedMsg.id
@@ -193,7 +189,7 @@ export default function ChatPage() {
           )
         );
 
-        // Save translation result to Supabase
+        // Persist final translation to database
         await supabase
           .from("messages")
           .update({ translated_content: cleanTranslation })
@@ -203,9 +199,8 @@ export default function ChatPage() {
       }
     } catch (err: any) {
       console.error("Translation run background tracking failure:", err);
-      const errorString = `[Translation Error: ${err.message || "Failed to process"}]`;
+      const errorString = `[Translation Error: Failed to process]`;
 
-      // Update local screen state directly on failure
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === insertedMsg.id
@@ -304,48 +299,38 @@ export default function ChatPage() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
         {messages.map((msg, index) => {
           const isMe = msg.sender_id === currentUserId;
-          
-          // Determine if translation line is necessary to render for the viewer
           const isTranslating = msg.translated_content === "Translating...";
-          
-          // CHANGE 2: Flexible error check to catch all background error formats reliably
           const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
           
-          const hasTranslationText = msg.translated_content && 
-                                     !isTranslating && 
-                                     !isError && 
-                                     msg.translated_content !== msg.content;
+          // Determine valid translated context availability
+          const hasTranslationText = msg.translated_content && !isTranslating && !isError;
 
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
-                {/* Original Message Text */}
-                <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 
-                {/* Loading State Animation */}
-                {isTranslating && (
-                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
-                     Translating message...
-                  </p>
-                )}
-
-                {/* Clean inline formatted translated view block */}
-                {hasTranslationText && (
+                {/* FIX 2: Only show original text to the person who sent it. 
+                    Show the translated text to the receiver so the layout stays single-language per person. */}
+                {isMe ? (
+                  <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
+                ) : (
                   <>
-                    <hr className="my-2 border-white/10" />
-                    <p className="text-xs italic text-blue-100 flex items-start gap-1 wrap-break-words whitespace-pre-wrap">
-                      <Globe size={12} className="mt-0.5 shrink-0 text-emerald-400" /> 
-                      <span>{msg.translated_content}</span>
-                    </p>
+                    {isTranslating && (
+                      <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
+                        Translating incoming message...
+                      </p>
+                    )}
+                    {hasTranslationText && (
+                      <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.translated_content}</p>
+                    )}
+                    {isError && (
+                      <p className="text-[10px] text-red-400 italic">
+                        [Could not translate incoming message]
+                      </p>
+                    )}
                   </>
                 )}
 
-                {/* Error Banner Fallback */}
-                {isError && (
-                  <p className="text-[10px] text-red-400 italic mt-1">
-                    {msg.translated_content}
-                  </p>
-                )}
               </div>
             </div>
           );
