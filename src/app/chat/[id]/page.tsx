@@ -113,38 +113,53 @@ export default function ChatPage() {
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
 
-  // 3. UPDATED BULLETPROOF SEND LOGIC (Instant Local Delivery)
+  // 3. UPDATED LOGIC: Instant local delivery that completely ignores translation bugs!
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId) return;
 
     const selectedLangObj = languages.find(l => l.name === targetLanguage) || { code: "en" };
     const tempInputMessage = message;
-    setMessage(""); // Instantly clear input window for responsiveness
+    
+    // 1. Clear input field instantly so the UI feels fast and responsive
+    setMessage(""); 
 
-    let translated = "";
-    try {
-      console.log(`Sending text to secure internal translation proxy...`);
-      translated = await translateText(tempInputMessage, targetLanguage);
-    } catch (err) {
-      console.error("Translation server connection timed out/failed:", err);
-      translated = "[Translation temporarily unavailable]";
-    }
-
-    // Database interaction runs smoothly even if your API key or route hits a snag
-    const { error } = await supabase.from("messages").insert([
-      {
-        chat_id: params.id,
-        sender_id: currentUserId,
-        content: tempInputMessage,
-        translated_content: translated || "[Translation processing breakdown]",
-        target_lang: selectedLangObj.code 
-      },
-    ]);
+    // 2. Save the message to Supabase IMMEDIATELY
+    console.log("Saving original message to database instantly...");
+    const { data: insertedMsg, error } = await supabase
+      .from("messages")
+      .insert([
+        {
+          chat_id: params.id,
+          sender_id: currentUserId,
+          content: tempInputMessage,
+          translated_content: "", // Start blank, background process will fill this
+          target_lang: selectedLangObj.code 
+        },
+      ])
+      .select()
+      .single();
 
     if (error) {
       setMessage(tempInputMessage); 
       toast.error("Message failed to sync to server");
       console.error("Supabase Database Insert Error:", error);
+      return; // Stop execution if database insert fails
+    }
+
+    // 3. Run the translation safely in the background after saving
+    try {
+      console.log(`Requesting translation in background...`);
+      const translated = await translateText(tempInputMessage, targetLanguage);
+      
+      if (translated && insertedMsg) {
+        // Update the message row with the real translation once it's done
+        await supabase
+          .from("messages")
+          .update({ translated_content: translated })
+          .eq("id", insertedMsg.id);
+      }
+    } catch (err) {
+      console.error("Background translation crashed:", err);
     }
   };
 
