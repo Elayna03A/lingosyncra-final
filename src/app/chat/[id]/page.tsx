@@ -300,24 +300,28 @@ export default function ChatPage() {
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 
-                {isMe ? (
-                  <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
-                ) : (
-                  <>
-                    {isTranslating && (
-                      <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
-                        Translating incoming message...
-                      </p>
-                    )}
-                    {hasTranslationText && (
-                      <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.translated_content}</p>
-                    )}
-                    {isError && (
-                      <p className="text-[10px] text-red-400 italic">
-                        [Could not translate incoming message]
-                      </p>
-                    )}
-                  </>
+                {/* Always display original untranslated text first */}
+                <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
+
+                {/* Status: Loading spinner text */}
+                {isTranslating && (
+                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
+                    Translating message...
+                  </p>
+                )}
+
+                {/* Status: Successful translation text injection */}
+                {hasTranslationText && (
+                  <p className="text-sm mt-1 border-t border-white/10 pt-1 text-slate-300 wrap-break-words whitespace-pre-wrap">
+                    {msg.translated_content}
+                  </p>
+                )}
+
+                {/* Status: Error message statement */}
+                {isError && (
+                  <p className="text-[10px] text-red-400 mt-1 italic">
+                    [Could not translate message]
+                  </p>
                 )}
 
               </div>
