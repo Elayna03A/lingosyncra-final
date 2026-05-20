@@ -100,6 +100,7 @@ export default function ChatPage() {
           
           if (payload.eventType === 'INSERT') {
             setMessages((prev) => {
+              // Vital deduplication check to prevent dual stacking rows
               if (prev.some(m => m.id === newData.id)) return prev;
               return [...prev, newData];
             });
@@ -158,8 +159,11 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
-    // Optimistically put the blank placeholder row into state immediately 
-    setMessages((prev) => [...prev, insertedMsg]);
+    // FIX: Only inject if real-time engine hasn't beat it to the array
+    setMessages((prev) => {
+      if (prev.some(m => m.id === insertedMsg.id)) return prev;
+      return [...prev, insertedMsg];
+    });
 
     try {
       const response = await fetch("/api/translate", {
@@ -173,7 +177,7 @@ export default function ChatPage() {
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
 
-        // FIX: Force immediate frontend state update so the text updates instantly!
+        // Immediate frontend update so the text updates instantly!
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === insertedMsg.id
@@ -289,35 +293,41 @@ export default function ChatPage() {
       </header>
 
       {/* Chat Messages Display Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50 flex flex-col">
         {messages.map((msg, index) => {
-          const isMe = msg.sender_id === currentUserId;
+          // Direct type-safe evaluation for alignment properties
+          const isMe = String(msg.sender_id) === String(currentUserId);
           const isTranslating = msg.translated_content === "Translating...";
           const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
           const hasTranslationText = msg.translated_content && !isTranslating && !isError;
 
           return (
-            <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-              <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
+            <div 
+              key={msg.id || `msg-${index}`} 
+              className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${
+                isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'
+              }`}>
                 
-                {/* Always display original untranslated text first */}
+                {/* Original Content text row */}
                 <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
 
-                {/* Status: Loading spinner text */}
+                {/* Status: Loading text */}
                 {isTranslating && (
                   <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
                     Translating message...
                   </p>
                 )}
 
-                {/* Status: Successful translation text injection */}
+                {/* Status: Transformed / Injected translated text */}
                 {hasTranslationText && (
                   <p className="text-sm mt-1 border-t border-white/10 pt-1 text-slate-300 wrap-break-words whitespace-pre-wrap">
                     {msg.translated_content}
                   </p>
                 )}
 
-                {/* Status: Error message statement */}
+                {/* Status: Error statement display row */}
                 {isError && (
                   <p className="text-[10px] text-red-400 mt-1 italic">
                     [Could not translate message]
