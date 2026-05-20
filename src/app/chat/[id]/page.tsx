@@ -4,7 +4,7 @@ import { useRouter, useParams } from "next/navigation";
 import { Send, ArrowLeft, Globe, ChevronUp, MoreVertical, Edit2, Trash2, Download, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "react-hot-toast";
- 
+
 export default function ChatPage() {
   const router = useRouter();
   const params = useParams(); 
@@ -20,25 +20,26 @@ export default function ChatPage() {
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [chatMeta, setChatMeta] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
- 
+
   const languages = [
     { name: "English", code: "en" },
     { name: "සිංහල (Sinhala)", code: "si" },
     { name: "தமிழ் (Tamil)", code: "ta" }
   ];
- 
+
   const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
- 
+
+  // Scroll to bottom helper
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
- 
-  // 1. Initial Load Fetcher
+
+  // 1. Initial Load Fetcher (Only loads history)
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (user) setCurrentUserId(user.id);
- 
+
       const { data: chatRow } = await supabase
         .from('chats')
         .select('*')
@@ -54,12 +55,12 @@ export default function ChatPage() {
         
         setContactName(activeName);
         setEditName(activeName);
- 
+
         const savedLangCode = isCurrentUserSender ? chatRow.user_1_lang : chatRow.user_2_lang;
         const matchedLang = languages.find(l => l.code === savedLangCode);
         if (matchedLang) setTargetLanguage(matchedLang.name);
       }
- 
+
       const { data: history } = await supabase
         .from('messages')
         .select('*')
@@ -67,27 +68,28 @@ export default function ChatPage() {
         .order('created_at', { ascending: true });
       if (history) setMessages(history);
     };
- 
+
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
- 
+
+  // Persist language target selection changes
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
     if (!chatMeta || !currentUserId) return;
- 
+
     const isUser1 = chatMeta.user_1 === currentUserId;
     const updatePayload = isUser1 ? { user_1_lang: langCode } : { user_2_lang: langCode };
- 
+
     await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
     setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
   };
- 
+
   // 2. REAL-TIME BROADCAST LISTENER
   useEffect(() => {
     if (!activeChatId) return;
     const safeChatId = String(activeChatId).trim();
- 
+
     const channel = supabase
       .channel(`chat-room-global-${safeChatId}`)
       .on(
@@ -109,47 +111,32 @@ export default function ChatPage() {
         }
       )
       .subscribe();
- 
+
     return () => {
       supabase.removeChannel(channel);
     };
   }, [activeChatId]); 
- 
-  // 3. LOGIC FIX: Always request translation based on what the OTHER user expects to read
+
+  // 3. SEND MESSAGE & IMMEDIATE STATE INJECTION
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
- 
+
     const { data: freshChat } = await supabase
       .from('chats')
       .select('*')
       .eq('id', activeChatId)
       .single();
- 
+
     const currentMeta = freshChat || chatMeta;
     const isMeUser1 = currentMeta.user_1 === currentUserId;
     
-    // Determine the language profile configuration of the partner receiving this text
-    const partnerLangCode = isMeUser1 ? (currentMeta.user_2_lang || 'en') : (currentMeta.user_1_lang || 'en');
-    const partnerLangObj = languages.find(l => l.code === partnerLangCode) || { name: "English", code: "en" };
- 
+    const receiverLangCode = isMeUser1 ? (currentMeta.user_2_lang || 'en') : (currentMeta.user_1_lang || 'en');
+    const receiverLangObj = languages.find(l => l.code === receiverLangCode) || { name: "English", code: "en" };
+
     const originalText = message;
     setMessage(""); 
- 
-    // If partner reads English, save directly and skip backend API translation tasks
-    if (partnerLangCode === 'en' || partnerLangObj.name.toLowerCase().includes("english")) {
-      await supabase.from("messages").insert([
-        {
-          chat_id: activeChatId,
-          sender_id: currentUserId,
-          content: originalText,
-          translated_content: originalText, 
-          target_lang: 'en'
-        },
-      ]);
-      return;
-    }
- 
-    // Insert with visual fallback placeholder string
+
+    // Insert original message with visible "Translating..." state
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
@@ -158,31 +145,35 @@ export default function ChatPage() {
           sender_id: currentUserId,
           content: originalText,
           translated_content: "Translating...", 
-          target_lang: partnerLangObj.code 
+          target_lang: receiverLangObj.code 
         },
       ])
       .select();
- 
+
     if (insertError || !insertedData || insertedData.length === 0) {
       setMessage(originalText);
       toast.error("Message delivery failed");
       return;
     }
- 
+
     const insertedMsg = insertedData[0];
- 
+
+    // Optimistically put the blank placeholder row into state immediately 
+    setMessages((prev) => [...prev, insertedMsg]);
+
     try {
       const response = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: originalText, targetLanguage: partnerLangObj.name }),
+        body: JSON.stringify({ text: originalText, targetLanguage: receiverLangObj.name }),
       });
- 
+
       const resultData = await response.json();
- 
+
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
- 
+
+        // FIX: Force immediate frontend state update so the text updates instantly!
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === insertedMsg.id
@@ -190,7 +181,8 @@ export default function ChatPage() {
               : msg
           )
         );
- 
+
+        // Save translation result quietly to Supabase
         await supabase
           .from("messages")
           .update({ translated_content: cleanTranslation })
@@ -199,9 +191,9 @@ export default function ChatPage() {
         throw new Error(resultData.error || "API error");
       }
     } catch (err: any) {
-      console.error("Translation run background tracking failure:", err);
+      console.error("Translation processing failure:", err);
       const errorString = `[Translation Error: Failed to process]`;
- 
+
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === insertedMsg.id
@@ -209,19 +201,19 @@ export default function ChatPage() {
             : msg
         )
       );
- 
+
       await supabase
         .from("messages")
         .update({ translated_content: errorString })
         .eq("id", insertedMsg.id);
     }
   };
- 
+
   const saveNewName = async () => {
     if (!editName || !chatMeta || !currentUserId || !activeChatId) return;
     const isUser1 = chatMeta.user_1 === currentUserId;
     const updatePayload = isUser1 ? { user_2_name: editName } : { user_1_name: editName };
- 
+
     const { error } = await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
     if (!error) { 
       setContactName(editName); 
@@ -229,7 +221,7 @@ export default function ChatPage() {
       toast.success("Display name saved!"); 
     }
   };
- 
+
   const confirmDelete = async () => {
     if (!activeChatId) return;
     const { error } = await supabase.from('chats').delete().eq('id', activeChatId);
@@ -238,7 +230,7 @@ export default function ChatPage() {
       router.push('/dashboard'); 
     }
   };
- 
+
   const handleDownloadXML = () => {
     try {
       const content = `<?xml version="1.0" encoding="UTF-8"?>\n<chat><info>Chat history with ${contactName}</info></chat>`;
@@ -254,7 +246,7 @@ export default function ChatPage() {
     }
     setIsSettingsOpen(false);
   };
- 
+
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-white">
       {/* Header Bar */}
@@ -275,7 +267,7 @@ export default function ChatPage() {
             </div>
           </div>
         </div>
- 
+
         <div className="relative">
           <button onClick={() => setIsSettingsOpen(!isSettingsOpen)} className="p-2 hover:bg-slate-700 rounded-lg text-slate-400 transition-all">
             {isSettingsOpen ? <X size={20} /> : <MoreVertical size={24} />}
@@ -295,60 +287,46 @@ export default function ChatPage() {
           )}
         </div>
       </header>
- 
+
       {/* Chat Messages Display Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
         {messages.map((msg, index) => {
           const isMe = msg.sender_id === currentUserId;
           const isTranslating = msg.translated_content === "Translating...";
           const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
-          
-          // CRITICAL FIX: Base layout inclusion on the CURRENT screen viewer's header setting, not the sender's choice!
-          const currentViewerNeedsTranslation = targetLanguage && !targetLanguage.toLowerCase().includes("english");
- 
-          const showTranslationLayout = currentViewerNeedsTranslation && 
-                                         msg.translated_content && 
-                                         !isTranslating && 
-                                         !isError && 
-                                         msg.translated_content !== msg.content;
- 
+          const hasTranslationText = msg.translated_content && !isTranslating && !isError;
+
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
-                {/* Original Message Text */}
-                <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 
-                {/* Loading State Animation - Show only if this viewer profile expects translation */}
-                {isTranslating && currentViewerNeedsTranslation && (
-                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
-                    Translating message...
-                  </p>
-                )}
- 
-                {/* Clean inline formatted translated view block (Matches screenshot format) */}
-                {showTranslationLayout && (
+                {isMe ? (
+                  <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
+                ) : (
                   <>
-                    <hr className="my-2 border-white/10" />
-                    <p className="text-xs italic text-blue-100 flex items-start gap-1 wrap-break-words whitespace-pre-wrap">
-                      <Globe size={12} className="mt-0.5 shrink-0 text-emerald-400" /> 
-                      <span>{msg.translated_content}</span>
-                    </p>
+                    {isTranslating && (
+                      <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
+                        Translating incoming message...
+                      </p>
+                    )}
+                    {hasTranslationText && (
+                      <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.translated_content}</p>
+                    )}
+                    {isError && (
+                      <p className="text-[10px] text-red-400 italic">
+                        [Could not translate incoming message]
+                      </p>
+                    )}
                   </>
                 )}
- 
-                {/* Error Banner Fallback */}
-                {isError && currentViewerNeedsTranslation && (
-                  <p className="text-[10px] text-red-400 italic mt-1">
-                    {msg.translated_content}
-                  </p>
-                )}
+
               </div>
             </div>
           );
         })}
         <div ref={messagesEndRef} />
       </div>
- 
+
       {/* Message Inputs Footer */}
       <footer className="p-4 bg-slate-800 border-t border-slate-700">
         <div className="max-w-4xl mx-auto flex flex-col gap-2">
@@ -379,7 +357,7 @@ export default function ChatPage() {
           </div>
         </div>
       </footer>
- 
+
       {/* Modals */}
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
@@ -394,7 +372,7 @@ export default function ChatPage() {
           </div>
         </div>
       )}
- 
+
       {showDeleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
