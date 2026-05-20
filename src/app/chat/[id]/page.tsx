@@ -21,8 +21,8 @@ export default function ChatPage() {
   const [chatMeta, setChatMeta] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Keep a live mutable reference of the language name so the realtime listener always reads the absolute newest choice instantly without resetting
-  const targetLanguageRef = useRef("English");
+  const chatMetaRef = useRef<any>(null);
+  const currentUserIdRef = useRef<string | null>(null);
 
   const languages = [
     { name: "English", code: "en" },
@@ -36,9 +36,15 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Core Dynamic Translation Processor
-  const translateIncomingMessage = async (msg: any, currentLangName: string) => {
-    if (!currentUserId || String(msg.sender_id) === String(currentUserId)) return;
+  // Core Translation Function with Rate Limit Protection
+  const translateIncomingMessage = async (msg: any, currentLangName: string, forceTranslate = false) => {
+    const activeUserId = currentUserId || currentUserIdRef.current;
+    if (!activeUserId || String(msg.sender_id) === String(activeUserId)) return;
+
+    // RATE LIMIT CATCH: Skip API call if this exact message was already processed successfully!
+    if (!forceTranslate && msg._local_translation && !msg._local_translating) {
+      return; 
+    }
 
     try {
       setMessages((prev) =>
@@ -50,6 +56,10 @@ export default function ChatPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: msg.content, targetLanguage: currentLangName }),
       });
+
+      if (response.status === 429) {
+        throw new Error("Gemini free tier rate limit exceeded. Retrying later...");
+      }
 
       const resultData = await response.json();
 
@@ -73,19 +83,22 @@ export default function ChatPage() {
           prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m)
         );
       }
-    } catch (err) {
-      console.error("Translation API error:", err);
+    } catch (err: any) {
+      console.error("Translation API processing error:", err.message || err);
       setMessages((prev) =>
         prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m)
       );
     }
   };
 
-  // 1. Initial Load Fetcher
+  // 1. Initial Data Fetcher
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) setCurrentUserId(user.id);
+      if (user) {
+        setCurrentUserId(user.id);
+        currentUserIdRef.current = user.id;
+      }
 
       const { data: chatRow } = await supabase
         .from('chats')
@@ -97,6 +110,8 @@ export default function ChatPage() {
 
       if (chatRow && user) {
         setChatMeta(chatRow);
+        chatMetaRef.current = chatRow;
+        
         const isCurrentUserSender = chatRow.user_1 === user.id;
         const activeName = isCurrentUserSender 
           ? (chatRow.user_2_name || "Chat Partner") 
@@ -109,7 +124,6 @@ export default function ChatPage() {
         const matchedLang = languages.find(l => l.code === savedLangCode);
         if (matchedLang) {
           setTargetLanguage(matchedLang.name);
-          targetLanguageRef.current = matchedLang.name;
           initialLangName = matchedLang.name;
         }
       }
@@ -123,10 +137,11 @@ export default function ChatPage() {
       if (history) {
         setMessages(history);
 
+        // Process initial translations safely sequentially
         if (user) {
           history.forEach((msg) => {
             if (String(msg.sender_id) !== String(user.id)) {
-              translateIncomingMessage(msg, initialLangName);
+              translateIncomingMessage(msg, initialLangName, false);
             }
           });
         }
@@ -136,10 +151,9 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Handle Language Dropdown Selection Change
+  // Handle Dropdown Manual Selection Translation Updates
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
-    targetLanguageRef.current = langName; // Sync to layout reference container
     setIsLangMenuOpen(false);
     if (!chatMeta || !currentUserId) return;
 
@@ -147,18 +161,22 @@ export default function ChatPage() {
     const updatePayload = isUser1 ? { user_1_lang: langCode } : { user_2_lang: langCode };
 
     await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
-    setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
+    
+    const updatedMeta = { ...chatMeta, ...updatePayload };
+    setChatMeta(updatedMeta);
+    chatMetaRef.current = updatedMeta;
 
+    // Force run recalculation translations because target language changed explicitly
     messages.forEach((msg) => {
       if (String(msg.sender_id) !== String(currentUserId)) {
-        translateIncomingMessage(msg, langName);
+        translateIncomingMessage(msg, langName, true);
       }
     });
   };
 
-  // 2. Continuous Static Realtime Listener (Never breaks or drops connection on updates)
+  // 2. Realtime Listener Architecture
   useEffect(() => {
-    if (!activeChatId || !currentUserId) return;
+    if (!activeChatId) return;
     const safeChatId = String(activeChatId).trim();
 
     const channel = supabase
@@ -168,6 +186,7 @@ export default function ChatPage() {
         { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${safeChatId}` }, 
         (payload) => {
           const newData = payload.new as any;
+          const activeUserId = currentUserIdRef.current;
           
           if (payload.eventType === 'INSERT') {
             setMessages((prev) => {
@@ -175,9 +194,19 @@ export default function ChatPage() {
               return [...prev, newData];
             });
 
-            if (String(newData.sender_id) !== String(currentUserId)) {
-              // Reads up-to-date active language out of mutable ref container safely
-              translateIncomingMessage(newData, targetLanguageRef.current);
+            if (activeUserId && String(newData.sender_id) !== String(activeUserId)) {
+              let activeTargetLang = "English";
+              const freshMeta = chatMetaRef.current;
+              
+              if (freshMeta) {
+                const isUser1 = freshMeta.user_1 === activeUserId;
+                const activeCode = isUser1 ? freshMeta.user_1_lang : freshMeta.user_2_lang;
+                const foundLang = languages.find(l => l.code === activeCode);
+                if (foundLang) activeTargetLang = foundLang.name;
+              }
+              
+              // New dynamic insert event message should run translation immediately
+              translateIncomingMessage(newData, activeTargetLang, true);
             }
           } else if (payload.eventType === 'UPDATE') {
             setMessages((prev) => 
@@ -191,7 +220,7 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeChatId, currentUserId]); // Removed targetLanguage from here so subscription remains unbroken!
+  }, [activeChatId]);
 
   // 3. Send Message
   const handleSendMessage = async () => {
@@ -247,6 +276,7 @@ export default function ChatPage() {
     }
   };
 
+  // Fully Patched XML Importer Engine
   const handleDownloadXML = () => {
     try {
       let xmlContent = `<?xml version="1.0" encoding="UTF-8"?>\n<chat>\n`;
@@ -269,8 +299,12 @@ export default function ChatPage() {
         xmlContent += `    <message>\n`;
         xmlContent += `      <sender>${escapeXml(senderLabel)}</sender>\n`;
         xmlContent += `      <content>${escapeXml(msg.content)}</content>\n`;
+        
+        // Output translation securely if it exists inside app state
         if (msg._local_translation) {
           xmlContent += `      <translation>${escapeXml(msg._local_translation)}</translation>\n`;
+        } else {
+          xmlContent += `      <translation>No translation available</translation>\n`;
         }
         xmlContent += `    </message>\n`;
       });
@@ -284,9 +318,9 @@ export default function ChatPage() {
       a.download = `${contactName.replace(/\s+/g, '_')}_history.xml`;
       a.click();
       URL.revokeObjectURL(url);
-      toast.success("XML history downloaded!");
+      toast.success("XML downloaded successfully!");
     } catch (e) { 
-      toast.error("Download failed"); 
+      toast.error("Download formatting broke"); 
     }
     setIsSettingsOpen(false);
   };
@@ -347,7 +381,7 @@ export default function ChatPage() {
               }`}>
                 
                 {isMe ? (
-                  <p className="text-sm wrap-break-word whitespace-pre-wrap">{msg.content}</p>
+                  <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 ) : (
                   <>
                     {isTranslating && (
@@ -358,7 +392,7 @@ export default function ChatPage() {
                     
                     {hasTranslationText && !isSameAsOriginal && (
                       <div className="flex flex-col gap-1">
-                        <p className="text-sm wrap-break-word whitespace-pre-wrap">{msg._local_translation}</p>
+                        <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg._local_translation}</p>
                         <span className="text-[10px] text-slate-400 border-t border-slate-700/60 pt-1 mt-0.5 block">
                           Original: {msg.content}
                         </span>
@@ -367,7 +401,7 @@ export default function ChatPage() {
 
                     {/* Fallback layout */}
                     {(!hasTranslationText || isSameAsOriginal) && !isTranslating && (
-                      <p className="text-sm wrap-break-word whitespace-pre-wrap">{msg.content}</p>
+                      <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                     )}
                   </>
                 )}
