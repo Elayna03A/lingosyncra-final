@@ -1,73 +1,74 @@
-import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
-import { createClient } from "@supabase/supabase-js";
+import { NextResponse } from "next/server";
 
-// Initialize Supabase Service Role client safely
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Force Next.js to treat this as a dynamic server runtime route
+export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const { messageId, text, targetLanguage } = await request.json();
+    // 1. Grab raw body safely
+    const body = await request.json();
+    const { text, targetLanguage } = body;
 
-    if (!text || !targetLanguage || !messageId) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    console.log("Incoming API Translation Request Payload:", { text, targetLanguage });
+
+    if (!text || !targetLanguage) {
+      return NextResponse.json(
+        { error: "Missing required text or targetLanguage parameters." },
+        { status: 400 }
+      );
     }
 
-    // 1. Explicitly type the language map structure to prevent indexing errors
-    const langMap: { 
-      [key: string]: { 
-        col: "translation_en" | "translation_si" | "translation_ta"; 
-        code: string; 
-      } 
-    } = {
-      "English": { col: "translation_en", code: "en" },
-      "සිංහල (Sinhala)": { col: "translation_si", code: "si" },
-      "தமிழ் (Tamil)": { col: "translation_ta", code: "ta" }
-    };
+    // 2. Fallback key selection lookup matrix
+    const apiKey = 
+      process.env.GEMINI_API_KEY || 
+      process.env.NEXT_PUBLIC_GEMINI_API_KEY || 
+      "";
 
-    const target = langMap[targetLanguage];
-    if (!target) {
-      return NextResponse.json({ error: "Unsupported target language" }, { status: 400 });
+    if (!apiKey || apiKey.trim() === "") {
+      console.error("CRITICAL RUNTIME ERROR: Environment key storage is completely empty.");
+      return NextResponse.json(
+        { error: "Server authentication misconfigured. API key not found." },
+        { status: 501 }
+      );
     }
 
-    // 2. Check if the database already has this translation cached
-    const { data: existingMsg } = await supabase
-      .from("messages")
-      .select(target.col)
-      .eq("id", messageId)
-      .single();
-
-    if (existingMsg && (existingMsg as any)[target.col]) {
-      return NextResponse.json({ translatedText: (existingMsg as any)[target.col] });
+    // 3. Map language inputs to clean instruction strings
+    let cleanLanguage = "English";
+    const lowerLang = String(targetLanguage).toLowerCase();
+    
+    if (lowerLang.includes("sinhala") || lowerLang === "si") {
+      cleanLanguage = "Sinhala";
+    } else if (lowerLang.includes("tamil") || lowerLang === "ta") {
+      cleanLanguage = "Tamil";
     }
 
-    // 3. Call Gemini ONLY if it's missing from the database cache
-    const prompt = `You are a professional real-time chat translator. Translate the following user message accurately into "${targetLanguage}". Return ONLY the final translated text response. Do not include any notes, explanations, or markdown formatting.\n\nMessage: ${text}`;
+    // 4. Initialize GenAI client safely inline inside execution context
+    const ai = new GoogleGenAI({ apiKey: apiKey });
 
+    // 5. Model execution configuration call block
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: prompt,
+      contents: `Translate this text into ${cleanLanguage}. Do not include conversational text, notes, markdown formatting, or extra thoughts. Reply ONLY with the pure translation.\n\nText:\n"${text}"`,
     });
 
-    const translatedText = response.text?.trim() || text;
+    const translatedText = response.text?.trim();
 
-    // 4. Cache the translation result in Supabase immediately
-    await supabase
-      .from("messages")
-      .update({ [target.col]: translatedText })
-      .eq("id", messageId);
-
-    return NextResponse.json({ translatedText });
-  } catch (error: any) {
-    console.error("Translation Engine breakdown:", error);
-    if (error.status === 429 || error.message?.includes("429")) {
-      return NextResponse.json({ error: "Rate limit reached. Please wait." }, { status: 429 });
+    if (!translatedText) {
+      return NextResponse.json(
+        { error: "Model instance returned an empty response value." },
+        { status: 500 }
+      );
     }
-    return NextResponse.json({ error: "Internal server translation error" }, { status: 500 });
+
+    // 6. Return successful structured response object literal
+    return NextResponse.json({ translatedText: translatedText });
+
+  } catch (error: any) {
+    console.error("CRITICAL API BREAKDOWN DETECTED:", error);
+    return NextResponse.json(
+      { error: error.message || "Internal system server execution crash." },
+      { status: 500 }
+    );
   }
 }
