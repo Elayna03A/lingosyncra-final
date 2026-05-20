@@ -21,10 +21,14 @@ export default function ChatPage() {
   const [chatMeta, setChatMeta] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Using refs to hold values across rapid state intervals safely
+  const chatMetaRef = useRef<any>(null);
+  const currentUserIdRef = useRef<string | null>(null);
+
   const languages = [
-    { name: "English", code: "en" },
-    { name: "සිංහල (Sinhala)", code: "si" },
-    { name: "தமிழ் (Tamil)", code: "ta" }
+    { name: "English", code: "en", col: "translation_en" },
+    { name: "සිංහල (Sinhala)", code: "si", col: "translation_si" },
+    { name: "தமிழ் (Tamil)", code: "ta", col: "translation_ta" }
   ];
 
   const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
@@ -33,28 +37,40 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Dynamic Translation Processor
+  // Dynamic Translation Processor with Smart Column Verification
   const translateIncomingMessage = async (msg: any, currentLangName: string) => {
-    // Never translate our own sent messages locally
-    if (!currentUserId || String(msg.sender_id) === String(currentUserId)) return;
+    const activeUserId = currentUserId || currentUserIdRef.current;
+    if (!activeUserId || String(msg.sender_id) === String(activeUserId)) return;
+
+    // FIX 1: If it's already translated in our local row state data, use it directly!
+    const targetLangObj = languages.find(l => l.name === currentLangName);
+    if (targetLangObj && msg[targetLangObj.col]) {
+      setMessages((prev) =>
+        prev.map((m) => m.id === msg.id ? { ...m, _local_translation: msg[targetLangObj.col] } : m)
+      );
+      return;
+    }
 
     try {
-      // Set a localized loading flag for this specific message row
       setMessages((prev) =>
         prev.map((m) => m.id === msg.id ? { ...m, _local_translating: true } : m)
       );
 
+      // FIX 2: Send messageId so backend can map and read cached data from Supabase
       const response = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: msg.content, targetLanguage: currentLangName }),
+        body: JSON.stringify({ 
+          messageId: msg.id, 
+          text: msg.content, 
+          targetLanguage: currentLangName 
+        }),
       });
 
       const resultData = await response.json();
 
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
-        
         setMessages((prev) =>
           prev.map((m) =>
             m.id === msg.id
@@ -62,46 +78,37 @@ export default function ChatPage() {
                   ...m, 
                   _local_translation: cleanTranslation, 
                   _local_translating: false,
-                  // If the translation matches the original text exactly, we don't need a double bubble
                   _is_same: cleanTranslation.toLowerCase() === msg.content.toLowerCase()
                 }
               : m
           )
         );
       } else {
-        setMessages((prev) =>
-          prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m)
-        );
+        setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m));
       }
     } catch (err) {
       console.error("Translation API error:", err);
-      setMessages((prev) =>
-        prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m)
-      );
+      setMessages((prev) => prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m));
     }
   };
 
-  // 1. Initial Load Fetcher
+  // 1. Initial Load Fetcher with Sequential Anti-Burst Processing
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) setCurrentUserId(user.id);
+      if (user) {
+        setCurrentUserId(user.id);
+        currentUserIdRef.current = user.id;
+      }
 
-      const { data: chatRow } = await supabase
-        .from('chats')
-        .select('*')
-        .eq('id', activeChatId)
-        .single();
-      
+      const { data: chatRow } = await supabase.from('chats').select('*').eq('id', activeChatId).single();
       let initialLangName = "English";
 
       if (chatRow && user) {
         setChatMeta(chatRow);
+        chatMetaRef.current = chatRow;
         const isCurrentUserSender = chatRow.user_1 === user.id;
-        const activeName = isCurrentUserSender 
-          ? (chatRow.user_2_name || "Chat Partner") 
-          : (chatRow.user_1_name || "Chat Partner");
-        
+        const activeName = isCurrentUserSender ? (chatRow.user_2_name || "Partner") : (chatRow.user_1_name || "Partner");
         setContactName(activeName);
         setEditName(activeName);
 
@@ -113,22 +120,21 @@ export default function ChatPage() {
         }
       }
 
-      const { data: history } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('chat_id', activeChatId)
-        .order('created_at', { ascending: true });
-
+      const { data: history } = await supabase.from('messages').select('*').eq('chat_id', activeChatId).order('created_at', { ascending: true });
       if (history) {
         setMessages(history);
 
-        // Run translation requests for all background history items from the partner
         if (user) {
-          history.forEach((msg) => {
+          // FIX 3: Replaced .forEach loops with sequential staggered timeout processing
+          let currentDelay = 0;
+          for (const msg of history) {
             if (String(msg.sender_id) !== String(user.id)) {
-              translateIncomingMessage(msg, initialLangName);
+              setTimeout(() => {
+                translateIncomingMessage(msg, initialLangName);
+              }, currentDelay);
+              currentDelay += 350; // Spaces out calls by 350ms to strictly comply with Gemini free tiers
             }
-          });
+          }
         }
       }
     };
@@ -146,68 +152,66 @@ export default function ChatPage() {
     const updatePayload = isUser1 ? { user_1_lang: langCode } : { user_2_lang: langCode };
 
     await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
-    setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
+    const updatedMeta = { ...chatMeta, ...updatePayload };
+    setChatMeta(updatedMeta);
+    chatMetaRef.current = updatedMeta;
 
-    // Instantly re-translate all existing incoming items to the newly selected language
-    messages.forEach((msg) => {
+    // FIX 4: Staggered intervals when updating languages on history items
+    let currentDelay = 0;
+    for (const msg of messages) {
       if (String(msg.sender_id) !== String(currentUserId)) {
-        translateIncomingMessage(msg, langName);
+        setTimeout(() => {
+          translateIncomingMessage(msg, langName);
+        }, currentDelay);
+        currentDelay += 350;
       }
-    });
+    }
   };
 
   // 2. Realtime Listener
   useEffect(() => {
-    if (!activeChatId || !currentUserId) return;
+    if (!activeChatId) return;
     const safeChatId = String(activeChatId).trim();
 
     const channel = supabase
       .channel(`chat-room-global-${safeChatId}`)
-      .on(
-        'postgres_changes', 
-        { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${safeChatId}` }, 
-        (payload) => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `chat_id=eq.${safeChatId}` }, 
+        async (payload) => {
           const newData = payload.new as any;
+          const activeUserId = currentUserIdRef.current;
           
           if (payload.eventType === 'INSERT') {
-            setMessages((prev) => {
-              if (prev.some(m => m.id === newData.id)) return prev;
-              return [...prev, newData];
-            });
+            setMessages((prev) => prev.some(m => m.id === newData.id) ? prev : [...prev, newData]);
 
-            if (String(newData.sender_id) !== String(currentUserId)) {
-              translateIncomingMessage(newData, targetLanguage);
+            if (activeUserId && String(newData.sender_id) !== String(activeUserId)) {
+              let currentTargetLang = "English";
+              const freshMeta = chatMetaRef.current;
+              if (freshMeta) {
+                const isUser1 = freshMeta.user_1 === activeUserId;
+                const activeCode = isUser1 ? freshMeta.user_1_lang : freshMeta.user_2_lang;
+                const foundLang = languages.find(l => l.code === activeCode);
+                if (foundLang) currentTargetLang = foundLang.name;
+              }
+              await translateIncomingMessage(newData, currentTargetLang);
             }
           } else if (payload.eventType === 'UPDATE') {
-            setMessages((prev) => 
-              prev.map((msg) => msg.id === newData.id ? { ...msg, ...newData } : msg)
-            );
+            setMessages((prev) => prev.map((msg) => msg.id === newData.id ? { ...msg, ...newData } : msg));
           }
         }
-      )
-      .subscribe();
+      ).subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [activeChatId, currentUserId, targetLanguage]); 
+    return () => { supabase.removeChannel(channel); };
+  }, [activeChatId]); 
 
   // 3. Send Message
   const handleSendMessage = async () => {
-    if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
-
+    if (!message.trim() || !currentUserId || !activeChatId) return;
     const originalText = message;
     setMessage(""); 
 
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
-      .insert([
-        {
-          chat_id: activeChatId,
-          sender_id: currentUserId,
-          content: originalText
-        },
-      ])
+      .insert([{ chat_id: activeChatId, sender_id: currentUserId, content: originalText }])
       .select();
 
     if (insertError || !insertedData || insertedData.length === 0) {
@@ -216,12 +220,7 @@ export default function ChatPage() {
       return;
     }
 
-    const insertedMsg = insertedData[0];
-
-    setMessages((prev) => {
-      if (prev.some(m => m.id === insertedMsg.id)) return prev;
-      return [...prev, insertedMsg];
-    });
+    setMessages((prev) => prev.some(m => m.id === insertedData[0].id) ? prev : [...prev, insertedData[0]]);
   };
 
   const saveNewName = async () => {
@@ -246,17 +245,25 @@ export default function ChatPage() {
     }
   };
 
+  // Safe History XML Export Engine mapping translations properly
   const handleDownloadXML = () => {
     try {
-      const content = `<?xml version="1.0" encoding="UTF-8"?>\n<chat><info>Chat history with ${contactName}</info></chat>`;
-      const blob = new Blob([content], { type: "text/xml" });
+      let xml = `<?xml version="1.0" encoding="UTF-8"?>\n<chat>\n  <info><partner>${contactName}</partner></info>\n  <messages>\n`;
+      messages.forEach((msg) => {
+        const isMe = String(msg.sender_id) === String(currentUserId);
+        const transValue = msg._local_translation || msg.content;
+        xml += `    <message>\n      <sender>${isMe ? "Me" : contactName}</sender>\n      <content>${msg.content}</content>\n      <translation>${transValue}</translation>\n    </message>\n`;
+      });
+      xml += `  </messages>\n</chat>`;
+
+      const blob = new Blob([xml], { type: "text/xml" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `${contactName}_history.xml`;
       a.click();
-      toast.success("XML file downloaded");
-    } catch (e) { 
+      toast.success("XML downloaded seamlessly!");
+    } catch { 
       toast.error("Download failed"); 
     }
     setIsSettingsOpen(false);
@@ -264,7 +271,6 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-white">
-      {/* Header Bar */}
       <header className="p-4 bg-slate-800 border-b border-slate-700 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button onClick={() => router.back()} className="p-2 hover:bg-slate-700 rounded-full transition-colors">
@@ -303,7 +309,6 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* Chat Messages Display Area */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50 flex flex-col">
         {messages.map((msg, index) => {
           const isMe = String(msg.sender_id) === String(currentUserId);
@@ -316,12 +321,9 @@ export default function ChatPage() {
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${
                 isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'
               }`}>
-                
                 {isMe ? (
-                  /* SENDER BUBBLE */
                   <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 ) : (
-                  /* RECEIVER BUBBLE */
                   <>
                     {isTranslating && (
                       <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
@@ -331,22 +333,18 @@ export default function ChatPage() {
                     
                     {hasTranslationText && !isSameAsOriginal && (
                       <div className="flex flex-col gap-1">
-                        {/* Shows the clean translated phrase up top */}
                         <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg._local_translation}</p>
-                        {/* Secondary small subtitle label shows what they typed originally */}
                         <span className="text-[10px] text-slate-400 border-t border-slate-700/60 pt-1 mt-0.5 block">
                           Original: {msg.content}
                         </span>
                       </div>
                     )}
 
-                    {/* Fallback layout: Show original if no translation is ready, or if it matched exactly */}
                     {(!hasTranslationText || isSameAsOriginal) && !isTranslating && (
                       <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                     )}
                   </>
                 )}
-
               </div>
             </div>
           );
@@ -354,7 +352,6 @@ export default function ChatPage() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Message Inputs Footer */}
       <footer className="p-4 bg-slate-800 border-t border-slate-700">
         <div className="max-w-4xl mx-auto flex flex-col gap-2">
           <div className="flex gap-2 items-end">
@@ -385,7 +382,6 @@ export default function ChatPage() {
         </div>
       </footer>
 
-      {/* Modals */}
       {isEditing && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
           <div className="w-full max-w-sm bg-slate-800 border border-slate-700 p-6 rounded-3xl shadow-2xl">
