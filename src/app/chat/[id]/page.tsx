@@ -247,20 +247,66 @@ export default function ChatPage() {
   };
 
   const handleDownloadXML = () => {
-    try {
-      const content = `<?xml version="1.0" encoding="UTF-8"?>\n<chat><info>Chat history with ${contactName}</info></chat>`;
-      const blob = new Blob([content], { type: "text/xml" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${contactName}_history.xml`;
-      a.click();
-      toast.success("XML file downloaded");
-    } catch (e) { 
-      toast.error("Download failed"); 
-    }
-    setIsSettingsOpen(false);
-  };
+  try {
+    // 1. Build the XML header structure
+    let xmlContent = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+    xmlContent += `<chat>\n`;
+    xmlContent += `  <info>\n`;
+    xmlContent += `    <partner>${contactName}</partner>\n`;
+    xmlContent += `    <my_target_language>${targetLanguage}</my_target_language>\n`;
+    xmlContent += `    <exported_at>${new Date().toISOString()}</exported_at>\n`;
+    xmlContent += `  </info>\n`;
+    xmlContent += `  <messages>\n`;
+
+    // 2. Loop through all active chat messages in state
+    messages.forEach((msg) => {
+      const isMe = String(msg.sender_id) === String(currentUserId);
+      const senderLabel = isMe ? "Me" : contactName;
+      
+      // Helper function to escape special XML characters like &, <, >
+      const escapeXml = (str: string) => {
+        if (!str) return "";
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&apos;");
+      };
+
+      xmlContent += `    <message id="${msg.id || ''}">\n`;
+      xmlContent += `      <sender>${escapeXml(senderLabel)}</sender>\n`;
+      xmlContent += `      <original_text>${escapeXml(msg.content)}</original_text>\n`;
+      
+      // If a translation exists for this specific message row, include it
+      if (msg._local_translation) {
+        xmlContent += `      <translated_text>${escapeXml(msg._local_translation)}</translated_text>\n`;
+      }
+      
+      xmlContent += `      <timestamp>${msg.created_at || ''}</timestamp>\n`;
+      xmlContent += `    </message>\n`;
+    });
+
+    xmlContent += `  </messages>\n`;
+    xmlContent += `</chat>`;
+
+    // 3. Create the file download trigger
+    const blob = new Blob([xmlContent], { type: "text/xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${contactName.replace(/\s+/g, '_')}_history.xml`;
+    a.click();
+    
+    // Clean up memory
+    URL.revokeObjectURL(url);
+    toast.success("XML file downloaded with history!");
+  } catch (e) { 
+    console.error("XML compilation error:", e);
+    toast.error("Download failed"); 
+  }
+  setIsSettingsOpen(false);
+};
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-white">
