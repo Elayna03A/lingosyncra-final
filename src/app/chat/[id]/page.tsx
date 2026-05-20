@@ -29,21 +29,17 @@ export default function ChatPage() {
 
   const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
-  // Scroll to bottom helper
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Helper function to dynamically translate incoming text inside the local UI state layer
+  // Dynamic Translation Processor
   const translateIncomingMessage = async (msg: any, currentLangName: string) => {
-    // Only translate if the message came from the OTHER user
+    // Never translate our own sent messages locally
     if (!currentUserId || String(msg.sender_id) === String(currentUserId)) return;
-    
-    // If the active user has selected English, show the clean original content
-    if (currentLangName.toLowerCase() === "english") return;
 
     try {
-      // Turn on localized pulse indicator for this message row
+      // Set a localized loading flag for this specific message row
       setMessages((prev) =>
         prev.map((m) => m.id === msg.id ? { ...m, _local_translating: true } : m)
       );
@@ -57,10 +53,18 @@ export default function ChatPage() {
       const resultData = await response.json();
 
       if (response.ok && resultData.translatedText) {
+        const cleanTranslation = resultData.translatedText.trim();
+        
         setMessages((prev) =>
           prev.map((m) =>
             m.id === msg.id
-              ? { ...m, _local_translation: resultData.translatedText.trim(), _local_translating: false }
+              ? { 
+                  ...m, 
+                  _local_translation: cleanTranslation, 
+                  _local_translating: false,
+                  // If the translation matches the original text exactly, we don't need a double bubble
+                  _is_same: cleanTranslation.toLowerCase() === msg.content.toLowerCase()
+                }
               : m
           )
         );
@@ -70,14 +74,14 @@ export default function ChatPage() {
         );
       }
     } catch (err) {
-      console.error("Dynamic translation background routine caught error:", err);
+      console.error("Translation API error:", err);
       setMessages((prev) =>
         prev.map((m) => m.id === msg.id ? { ...m, _local_translating: false } : m)
       );
     }
   };
 
-  // 1. Initial Load Fetcher (Loads history safely)
+  // 1. Initial Load Fetcher
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -118,8 +122,8 @@ export default function ChatPage() {
       if (history) {
         setMessages(history);
 
-        // Pre-translate any existing message items received from the other user
-        if (user && initialLangName.toLowerCase() !== "english") {
+        // Run translation requests for all background history items from the partner
+        if (user) {
           history.forEach((msg) => {
             if (String(msg.sender_id) !== String(user.id)) {
               translateIncomingMessage(msg, initialLangName);
@@ -132,7 +136,7 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Persist language target selection changes down to db profiles dynamically
+  // Handle Language Dropdown Selection Change
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
@@ -144,7 +148,7 @@ export default function ChatPage() {
     await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
     setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
 
-    // Re-trigger fresh translation passes for all visible incoming items 
+    // Instantly re-translate all existing incoming items to the newly selected language
     messages.forEach((msg) => {
       if (String(msg.sender_id) !== String(currentUserId)) {
         translateIncomingMessage(msg, langName);
@@ -152,7 +156,7 @@ export default function ChatPage() {
     });
   };
 
-  // 2. REAL-TIME BROADCAST LISTENER
+  // 2. Realtime Listener
   useEffect(() => {
     if (!activeChatId || !currentUserId) return;
     const safeChatId = String(activeChatId).trim();
@@ -171,7 +175,6 @@ export default function ChatPage() {
               return [...prev, newData];
             });
 
-            // Hand incoming real-time messages to the automated translation dispatcher
             if (String(newData.sender_id) !== String(currentUserId)) {
               translateIncomingMessage(newData, targetLanguage);
             }
@@ -189,14 +192,13 @@ export default function ChatPage() {
     };
   }, [activeChatId, currentUserId, targetLanguage]); 
 
-  // 3. SEND CLEAN MESSAGE PIPELINE
+  // 3. Send Message
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
     const originalText = message;
     setMessage(""); 
 
-    // Insert only raw text cleanly down to standard storage. No translation triggers run on send.
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
@@ -216,7 +218,6 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
-    // Append to own screen state container instantly
     setMessages((prev) => {
       if (prev.some(m => m.id === insertedMsg.id)) return prev;
       return [...prev, insertedMsg];
@@ -308,6 +309,7 @@ export default function ChatPage() {
           const isMe = String(msg.sender_id) === String(currentUserId);
           const isTranslating = msg._local_translating === true;
           const hasTranslationText = msg._local_translation && !isTranslating;
+          const isSameAsOriginal = msg._is_same === true;
 
           return (
             <div key={msg.id || `msg-${index}`} className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'}`}>
@@ -316,29 +318,31 @@ export default function ChatPage() {
               }`}>
                 
                 {isMe ? (
-                  /* SENDER BUBBLE: Displays original text plainly */
+                  /* SENDER BUBBLE */
                   <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 ) : (
-                  /* RECEIVER BUBBLE: Handles active translation interfaces */
+                  /* RECEIVER BUBBLE */
                   <>
-                    {/* Render original text standard if target language is set to English */}
-                    {targetLanguage.toLowerCase() === "english" ? (
+                    {isTranslating && (
+                      <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
+                        Translating incoming message...
+                      </p>
+                    )}
+                    
+                    {hasTranslationText && !isSameAsOriginal && (
+                      <div className="flex flex-col gap-1">
+                        {/* Shows the clean translated phrase up top */}
+                        <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg._local_translation}</p>
+                        {/* Secondary small subtitle label shows what they typed originally */}
+                        <span className="text-[10px] text-slate-400 border-t border-slate-700/60 pt-1 mt-0.5 block">
+                          Original: {msg.content}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Fallback layout: Show original if no translation is ready, or if it matched exactly */}
+                    {(!hasTranslationText || isSameAsOriginal) && !isTranslating && (
                       <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
-                    ) : (
-                      <>
-                        {isTranslating && (
-                          <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
-                            Translating incoming message...
-                          </p>
-                        )}
-                        {hasTranslationText && (
-                          <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg._local_translation}</p>
-                        )}
-                        {!isTranslating && !hasTranslationText && (
-                          /* Fallback view container while background promises clear */
-                          <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
-                        )}
-                      </>
                     )}
                   </>
                 )}
