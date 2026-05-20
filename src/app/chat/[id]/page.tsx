@@ -29,12 +29,12 @@ export default function ChatPage() {
 
   const activeChatId = Array.isArray(params?.id) ? params.id[0] : params?.id;
 
-  // Automatically scroll down on new messages
+  // Scroll to bottom helper
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 1. Initial Load Fetcher
+  // 1. Initial Load Fetcher (Only loads history)
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -72,7 +72,7 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Persist target language modifications
+  // Persist language target selection changes
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
@@ -117,7 +117,7 @@ export default function ChatPage() {
     };
   }, [activeChatId]); 
 
-  // 3. SEND MESSAGE HANDLING
+  // 3. SEND MESSAGE & IMMEDIATE STATE INJECTION
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
@@ -130,14 +130,13 @@ export default function ChatPage() {
     const currentMeta = freshChat || chatMeta;
     const isMeUser1 = currentMeta.user_1 === currentUserId;
     
-    // Find what language the receiving partner reads in
     const receiverLangCode = isMeUser1 ? (currentMeta.user_2_lang || 'en') : (currentMeta.user_1_lang || 'en');
     const receiverLangObj = languages.find(l => l.code === receiverLangCode) || { name: "English", code: "en" };
 
     const originalText = message;
     setMessage(""); 
 
-    // Insert directly to Supabase. Realtime listener safely appends this row to state.
+    // Insert original message with visible "Translating..." state
     const { data: insertedData, error: insertError } = await supabase
       .from("messages")
       .insert([
@@ -159,6 +158,9 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
+    // Optimistically put the blank placeholder row into state immediately 
+    setMessages((prev) => [...prev, insertedMsg]);
+
     try {
       const response = await fetch("/api/translate", {
         method: "POST",
@@ -171,7 +173,7 @@ export default function ChatPage() {
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
 
-        // Push state modification right away across the current workspace
+        // FIX: Force immediate frontend state update so the text updates instantly!
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === insertedMsg.id
@@ -180,6 +182,7 @@ export default function ChatPage() {
           )
         );
 
+        // Save translation result quietly to Supabase
         await supabase
           .from("messages")
           .update({ translated_content: cleanTranslation })
@@ -188,7 +191,7 @@ export default function ChatPage() {
         throw new Error(resultData.error || "API error");
       }
     } catch (err: any) {
-      console.error("Translation run background failure:", err);
+      console.error("Translation processing failure:", err);
       const errorString = `[Translation Error: Failed to process]`;
 
       setMessages((prev) =>
@@ -291,46 +294,30 @@ export default function ChatPage() {
           const isMe = msg.sender_id === currentUserId;
           const isTranslating = msg.translated_content === "Translating...";
           const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
-          
-          // Show translation sub-block only if current device viewer explicitly chose non-English translation options
-          const currentViewerNeedsTranslation = targetLanguage && !targetLanguage.toLowerCase().includes("english");
-          
-          const showTranslationLayout = currentViewerNeedsTranslation && 
-                                        msg.translated_content && 
-                                        !isTranslating && 
-                                        !isError && 
-                                        msg.translated_content !== msg.content;
+          const hasTranslationText = msg.translated_content && !isTranslating && !isError;
 
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 
-                {/* Always display original language text inside bubble container base */}
-                <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
-                
-                {/* Async Loading status indicators */}
-                {isTranslating && currentViewerNeedsTranslation && (
-                  <p className="text-[10px] text-slate-400 italic mt-1 animate-pulse flex items-center gap-1">
-                    Translating message...
-                  </p>
-                )}
-
-                {/* Earlier formatting style: Divider block containing clean translated output strings */}
-                {showTranslationLayout && (
+                {isMe ? (
+                  <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
+                ) : (
                   <>
-                    <hr className="my-2 border-white/10" />
-                    <p className="text-xs italic text-blue-100 flex items-start gap-1 wrap-break-words whitespace-pre-wrap">
-                      <Globe size={12} className="mt-0.5 shrink-0 text-emerald-400" /> 
-                      <span>{msg.translated_content}</span>
-                    </p>
+                    {isTranslating && (
+                      <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
+                        Translating incoming message...
+                      </p>
+                    )}
+                    {hasTranslationText && (
+                      <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.translated_content}</p>
+                    )}
+                    {isError && (
+                      <p className="text-[10px] text-red-400 italic">
+                        [Could not translate incoming message]
+                      </p>
+                    )}
                   </>
-                )}
-
-                {/* Fallback layout reporting backend errors */}
-                {isError && currentViewerNeedsTranslation && (
-                  <p className="text-[10px] text-red-400 italic mt-1">
-                    {msg.translated_content}
-                  </p>
                 )}
 
               </div>
