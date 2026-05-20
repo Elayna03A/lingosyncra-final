@@ -34,7 +34,7 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 1. Initial Load Fetcher (Only loads history)
+  // 1. Initial Load Fetcher
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -72,7 +72,7 @@ export default function ChatPage() {
     if (activeChatId) fetchChatData();
   }, [activeChatId]);
 
-  // Persist language target selection changes
+  // Persist language changes
   const handleLanguageChange = async (langName: string, langCode: string) => {
     setTargetLanguage(langName);
     setIsLangMenuOpen(false);
@@ -117,7 +117,7 @@ export default function ChatPage() {
     };
   }, [activeChatId]); 
 
-  // 3. SEND MESSAGE & IMMEDIATE STATE INJECTION
+  // 3. SEND MESSAGE & INSTANT INJECTION
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
@@ -135,6 +135,20 @@ export default function ChatPage() {
 
     const originalText = message;
     setMessage(""); 
+
+    // If target language is English, just save directly without hitting translator
+    if (receiverLangCode === 'en' || receiverLangObj.name.toLowerCase().includes("english")) {
+      await supabase.from("messages").insert([
+        {
+          chat_id: activeChatId,
+          sender_id: currentUserId,
+          content: originalText,
+          translated_content: originalText, 
+          target_lang: 'en'
+        },
+      ]);
+      return;
+    }
 
     // Insert original message with visible "Translating..." state
     const { data: insertedData, error: insertError } = await supabase
@@ -158,7 +172,7 @@ export default function ChatPage() {
 
     const insertedMsg = insertedData[0];
 
-    // Optimistically put the blank placeholder row into state immediately 
+    // Optimistically inject into state for the sender immediately
     setMessages((prev) => [...prev, insertedMsg]);
 
     try {
@@ -173,7 +187,7 @@ export default function ChatPage() {
       if (response.ok && resultData.translatedText) {
         const cleanTranslation = resultData.translatedText.trim();
 
-        // FIX: Force immediate frontend state update so the text updates instantly!
+        // Update sender visual state instantly
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === insertedMsg.id
@@ -182,7 +196,7 @@ export default function ChatPage() {
           )
         );
 
-        // Save translation result quietly to Supabase
+        // Commit permanently to Supabase
         await supabase
           .from("messages")
           .update({ translated_content: cleanTranslation })
@@ -191,20 +205,20 @@ export default function ChatPage() {
         throw new Error(resultData.error || "API error");
       }
     } catch (err: any) {
-      console.error("Translation processing failure:", err);
-      const errorString = `[Translation Error: Failed to process]`;
+      console.error("Translation run background failure:", err);
+      const fallbackString = `[Translation Error: Failed to process]`;
 
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === insertedMsg.id
-            ? { ...msg, translated_content: errorString }
+            ? { ...msg, translated_content: fallbackString }
             : msg
         )
       );
 
       await supabase
         .from("messages")
-        .update({ translated_content: errorString })
+        .update({ translated_content: fallbackString })
         .eq("id", insertedMsg.id);
     }
   };
@@ -294,32 +308,44 @@ export default function ChatPage() {
           const isMe = msg.sender_id === currentUserId;
           const isTranslating = msg.translated_content === "Translating...";
           const isError = msg.translated_content && msg.translated_content.includes("[Translation Error:");
-          const hasTranslationText = msg.translated_content && !isTranslating && !isError;
+          
+          // Show translation split only if it's processing, failed, or actual distinct language output exists
+          const hasTranslationText = msg.translated_content && 
+                                     !isTranslating && 
+                                     !isError && 
+                                     msg.translated_content !== msg.content;
 
           return (
             <div key={msg.id || index} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
               <div className={`max-w-[80%] p-3 rounded-2xl shadow-md transition-all duration-200 ${isMe ? 'bg-blue-600 text-white rounded-tr-none' : 'bg-slate-800 text-white rounded-tl-none'}`}>
                 
-                {isMe ? (
-                  <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
-                ) : (
+                {/* Always show Original Text First for both users */}
+                <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
+                
+                {/* 1. Loading Visual Layout */}
+                {isTranslating && (
+                  <p className="text-[10px] text-slate-300/70 italic mt-1 animate-pulse flex items-center gap-1">
+                    Translating message...
+                  </p>
+                )}
+
+                {/* 2. Finished Translation Layout (Matches your Screenshot formatting!) */}
+                {hasTranslationText && (
                   <>
-                    {isTranslating && (
-                      <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
-                        Translating incoming message...
-                      </p>
-                    )}
-                    {hasTranslationText && (
-                      <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.translated_content}</p>
-                    )}
-                    {isError && (
-                      <p className="text-[10px] text-red-400 italic">
-                        [Could not translate incoming message]
-                      </p>
-                    )}
+                    <hr className="my-2 border-white/10" />
+                    <p className="text-xs italic text-blue-100 flex items-start gap-1 wrap-break-words whitespace-pre-wrap">
+                      <Globe size={12} className="mt-0.5 shrink-0 text-emerald-400" /> 
+                      <span>{msg.translated_content}</span>
+                    </p>
                   </>
                 )}
 
+                {/* 3. Error Visual Layout */}
+                {isError && (
+                  <p className="text-[10px] text-red-300/80 italic mt-1">
+                    {msg.translated_content}
+                  </p>
+                )}
               </div>
             </div>
           );
