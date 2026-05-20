@@ -49,26 +49,17 @@ export async function POST(request: Request) {
     // 5. Model execution configuration call block
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `You are an expert translator. Translate the following user message cleanly into ${cleanLanguage}. 
-Requirements:
-- Translate the true meaning of the message contextually.
-- If the text is a phonetic spelling (e.g., Sinhala words written in English letters like 'aybowan' or 'kohomada'), translate it to its proper meaningful form in ${cleanLanguage}.
-- Do not include conversational remarks, markdown syntax, or additional thoughts.
-- Reply ONLY with the pure translation text.
-
-User message to translate:
-${text}`,
+      contents: `Translate this text into ${cleanLanguage}. Do not include conversational text, notes, markdown formatting, or extra thoughts. Reply ONLY with the pure translation.\n\nText:\n"${text}"`,
     });
 
-    // FIX: Safely extract text from the getter or fallback to structural data tree
-    let translatedText = "";
-    if (typeof response.text === "string") {
-      translatedText = response.text;
-    } else if (response.candidates?.[0]?.content?.parts?.[0]?.text) {
-      translatedText = response.candidates[0].content.parts[0].text;
-    }
+    const translatedText = response.text?.trim();
 
-    translatedText = translatedText.trim();
+    if (!translatedText) {
+      return NextResponse.json(
+        { error: "Model instance returned an empty response value." },
+        { status: 500 }
+      );
+    }
 
     // 6. Return successful structured response object literal
     return NextResponse.json({ translatedText: translatedText });
