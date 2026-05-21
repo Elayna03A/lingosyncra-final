@@ -2,14 +2,16 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js"; 
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
+// Safeguard initialization so Vercel can build without crashing
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-// 1. Explicitly type the possible language columns to satisfy TypeScript
+const supabaseAdmin = supabaseUrl && supabaseServiceKey 
+  ? createClient(supabaseUrl, supabaseServiceKey)
+  : null;
+
 type TranslationColumns = "translation_en" | "translation_si" | "translation_ta";
 
 export async function POST(request: Request) {
@@ -20,7 +22,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
     }
 
-    // 2. Enforce the strict type on our dynamic tracking column variable
+    if (!supabaseAdmin) {
+      return NextResponse.json({ error: "Database configuration missing" }, { status: 500 });
+    }
+
     let langColumn: TranslationColumns = "translation_en";
     
     if (targetLanguage.includes("Sinhala")) {
@@ -36,7 +41,6 @@ export async function POST(request: Request) {
       .eq("id", messageId)
       .single();
 
-    // 3. Cast the fetched record data so TypeScript recognizes the dynamic text key indexing
     if (!fetchError && existingMessage) {
       const messageData = existingMessage as Record<TranslationColumns, string | null>;
       if (messageData[langColumn]) {
