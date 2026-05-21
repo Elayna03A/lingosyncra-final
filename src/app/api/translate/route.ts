@@ -1,74 +1,69 @@
-import { GoogleGenAI } from "@google/genai";
 import { NextResponse } from "next/server";
+import { GoogleGenAI } from "@google/genai";
+import { createClient } from "@supabase/supabase-js"; 
 
-// Force Next.js to treat this as a dynamic server runtime route
-export const dynamic = "force-dynamic";
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+// 1. Explicitly type the possible language columns to satisfy TypeScript
+type TranslationColumns = "translation_en" | "translation_si" | "translation_ta";
 
 export async function POST(request: Request) {
   try {
-    // 1. Grab raw body safely
-    const body = await request.json();
-    const { text, targetLanguage } = body;
+    const { messageId, text, targetLanguage } = await request.json();
 
-    console.log("Incoming API Translation Request Payload:", { text, targetLanguage });
-
-    if (!text || !targetLanguage) {
-      return NextResponse.json(
-        { error: "Missing required text or targetLanguage parameters." },
-        { status: 400 }
-      );
+    if (!text || !targetLanguage || !messageId) {
+      return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
     }
 
-    // 2. Fallback key selection lookup matrix
-    const apiKey = 
-      process.env.GEMINI_API_KEY || 
-      process.env.NEXT_PUBLIC_GEMINI_API_KEY || 
-      "";
-
-    if (!apiKey || apiKey.trim() === "") {
-      console.error("CRITICAL RUNTIME ERROR: Environment key storage is completely empty.");
-      return NextResponse.json(
-        { error: "Server authentication misconfigured. API key not found." },
-        { status: 501 }
-      );
-    }
-
-    // 3. Map language inputs to clean instruction strings
-    let cleanLanguage = "English";
-    const lowerLang = String(targetLanguage).toLowerCase();
+    // 2. Enforce the strict type on our dynamic tracking column variable
+    let langColumn: TranslationColumns = "translation_en";
     
-    if (lowerLang.includes("sinhala") || lowerLang === "si") {
-      cleanLanguage = "Sinhala";
-    } else if (lowerLang.includes("tamil") || lowerLang === "ta") {
-      cleanLanguage = "Tamil";
+    if (targetLanguage.includes("Sinhala")) {
+      langColumn = "translation_si";
+    } else if (targetLanguage.includes("Tamil")) {
+      langColumn = "translation_ta";
     }
 
-    // 4. Initialize GenAI client safely inline inside execution context
-    const ai = new GoogleGenAI({ apiKey: apiKey });
+    // STEP 1: Check if this specific message already has the translation saved
+    const { data: existingMessage, error: fetchError } = await supabaseAdmin
+      .from("messages")
+      .select(langColumn)
+      .eq("id", messageId)
+      .single();
 
-    // 5. Model execution configuration call block
+    // 3. Cast the fetched record data so TypeScript recognizes the dynamic text key indexing
+    if (!fetchError && existingMessage) {
+      const messageData = existingMessage as Record<TranslationColumns, string | null>;
+      if (messageData[langColumn]) {
+        return NextResponse.json({ translatedText: messageData[langColumn] });
+      }
+    }
+
+    // STEP 2: If it wasn't saved, call Gemini to translate it
+    const prompt = `You are a professional real-time chat translator. Translate the following text exactly into ${targetLanguage}. Return ONLY the direct translation text. Do not add explanations, notes, or extra punctuation: "${text}"`;
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Translate this text into ${cleanLanguage}. Do not include conversational text, notes, markdown formatting, or extra thoughts. Reply ONLY with the pure translation.\n\nText:\n"${text}"`,
+      contents: prompt,
     });
 
-    const translatedText = response.text?.trim();
+    const translatedText = response.text?.trim() || text;
 
-    if (!translatedText) {
-      return NextResponse.json(
-        { error: "Model instance returned an empty response value." },
-        { status: 500 }
-      );
-    }
+    // STEP 3: Save it permanently to that message row so it never translates again
+    await supabaseAdmin
+      .from("messages")
+      .update({ [langColumn]: translatedText })
+      .eq("id", messageId);
 
-    // 6. Return successful structured response object literal
-    return NextResponse.json({ translatedText: translatedText });
+    return NextResponse.json({ translatedText });
 
   } catch (error: any) {
-    console.error("CRITICAL API BREAKDOWN DETECTED:", error);
-    return NextResponse.json(
-      { error: error.message || "Internal system server execution crash." },
-      { status: 500 }
-    );
+    console.error("Critical Route Error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
