@@ -2,51 +2,73 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { Users, Calendar, ArrowLeft, ShieldCheck } from "lucide-react";
-
+import { Users, ArrowLeft, ShieldCheck, AlertCircle, Loader2 } from "lucide-react";
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const router = useRouter();
-
 
   useEffect(() => {
     const checkAdminAndFetchData = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-     
-      // Security Check: If not logged in or not an admin, kick them out
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role')
-        .eq('id', user?.id)
-        .single();
+      try {
+        setLoading(true);
+        setErrorMessage(null);
 
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        
+        if (authError || !user) {
+          console.error("Auth verification failed:", authError);
+          router.push("/dashboard");
+          return;
+        }
+        
+        // Security Check: Verify profile role matching 'admin'
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
 
-      if (profile?.role !== 'admin') {
-        router.push("/dashboard");
-        return;
+        if (profileError || profile?.role !== 'admin') {
+          console.error("Admin verification failed or insufficient role:", profileError);
+          router.push("/dashboard");
+          return;
+        }
+
+        // Fetch User Stats with full error checking
+        const { data, error: fetchError } = await supabase
+          .from('profiles')
+          .select('*') // Grabs everything available safely
+          .order('created_at', { ascending: false });
+
+        if (fetchError) {
+          throw fetchError;
+        }
+
+        if (data) {
+          setUsers(data);
+        }
+      } catch (err: any) {
+        console.error("Dashboard data fetching error:", err);
+        setErrorMessage(err?.message || "Failed to retrieve user logs. Check your database RLS policies.");
+      } finally {
+        setLoading(false);
       }
-
-
-      // Fetch User Stats
-      const { data } = await supabase
-        .from('profiles')
-        .select('email, created_at, role')
-        .order('created_at', { ascending: false });
-
-
-      if (data) setUsers(data);
-      setLoading(false);
     };
-
 
     checkAdminAndFetchData();
   }, [router]);
 
-
-  if (loading) return <div className="p-10 text-white">Verifying Admin Credentials...</div>;
-
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white gap-3">
+        <Loader2 className="animate-spin text-emerald-400" size={32} />
+        <p className="text-slate-400 animate-pulse">Verifying Admin Credentials...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-8">
@@ -58,11 +80,21 @@ export default function AdminDashboard() {
             </h1>
             <p className="text-slate-400">System Monitoring & User Analytics</p>
           </div>
-          <button onClick={() => router.push("/dashboard")} className="flex items-center gap-2 bg-slate-800 p-3 rounded-xl">
+          <button onClick={() => router.push("/dashboard")} className="flex items-center gap-2 bg-slate-800 hover:bg-slate-750 transition p-3 rounded-xl cursor-pointer">
             <ArrowLeft size={18} /> Back to App
           </button>
         </header>
 
+        {/* Display RLS Policy Errors or Column Mismatch Alerts if they occur */}
+        {errorMessage && (
+          <div className="mb-6 p-4 bg-red-950/40 border border-red-800 text-red-200 rounded-2xl flex items-start gap-3">
+            <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={20} />
+            <div>
+              <p className="font-semibold">Database Connection Warning</p>
+              <p className="text-sm text-red-300/90">{errorMessage}</p>
+            </div>
+          </div>
+        )}
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
@@ -73,31 +105,41 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-
         {/* User Table */}
         <div className="bg-slate-800 border border-slate-700 rounded-3xl overflow-hidden">
           <table className="w-full text-left">
-            <thead className="bg-slate-700/50">
+            <thead className="bg-slate-700/50 text-slate-300">
               <tr>
-                <th className="p-4">User Email</th>
+                <th className="p-4">User Details / ID</th>
                 <th className="p-4">Joined Date</th>
                 <th className="p-4">Role</th>
               </tr>
             </thead>
             <tbody>
-              {users.map((u, i) => (
-                <tr key={i} className="border-t border-slate-700 hover:bg-slate-700/30">
-                  <td className="p-4 font-medium">{u.email}</td>
-                  <td className="p-4 text-slate-400">
-                    {new Date(u.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="p-4">
-                    <span className={`px-2 py-1 rounded text-xs ${u.role === 'admin' ? 'bg-emerald-900 text-emerald-400' : 'bg-blue-900 text-blue-400'}`}>
-                      {u.role}
-                    </span>
+              {users.length === 0 ? (
+                <tr>
+                  <td colSpan={3} className="p-8 text-center text-slate-500">
+                    No records found. If RLS is enabled, ensure your user profile has explicit read authorization.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                users.map((u, i) => (
+                  <tr key={u.id || i} className="border-t border-slate-700 hover:bg-slate-700/30">
+                    <td className="p-4 font-medium flex flex-col">
+                      <span>{u.email || "No Email Provided"}</span>
+                      <span className="text-xs text-slate-500 font-mono tracking-tight">{u.id}</span>
+                    </td>
+                    <td className="p-4 text-slate-400">
+                      {u.created_at ? new Date(u.created_at).toLocaleDateString() : "Unknown"}
+                    </td>
+                    <td className="p-4">
+                      <span className={`px-2 py-1 rounded text-xs tracking-wide uppercase font-semibold ${u.role === 'admin' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60' : 'bg-blue-950 text-blue-400 border border-blue-800/60'}`}>
+                        {u.role || 'authenticated'}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -105,4 +147,3 @@ export default function AdminDashboard() {
     </div>
   );
 }
-
