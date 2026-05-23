@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js"; 
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
-
+// Initialize the Google Gen AI client. 
+// It will automatically read process.env.GEMINI_API_KEY natively.
+// Pass an empty object so the SDK initializes correctly and pulls GEMINI_API_KEY from your environment variables natively.
+const ai = new GoogleGenAI({});
 // Safeguard initialization so Vercel can build without crashing
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
@@ -44,6 +46,8 @@ export async function POST(request: Request) {
       langColumn = "translation_si";
     } else if (normalizedTarget.includes("tamil") || normalizedTarget.includes("தமிழ்")) {
       langColumn = "translation_ta";
+    } else {
+      langColumn = "translation_en";
     }
 
     // STEP 1: Check if this specific message already has the translation saved
@@ -63,13 +67,13 @@ export async function POST(request: Request) {
     // STEP 2: Call Gemini to translate it
     const prompt = `You are a professional real-time chat translator. Translate the following text exactly into ${targetLanguage}. Return ONLY the direct translation text. Do not add explanations, notes, or extra punctuation: "${text}"`;
 
+    // Make sure your Vercel Environment Key is named GEMINI_API_KEY
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
     });
 
-    // FIXED: Correct parsing for the modern official @google/genai SDK
-    // The response text is extracted cleanly via candidates or direct text helper depending on the version
+    // Extracting text safely from the official @google/genai SDK response structure
     const candidateText = response.candidates?.[0]?.content?.parts?.[0]?.text;
     const translatedText = (candidateText || response.text || "").trim() || text;
 
