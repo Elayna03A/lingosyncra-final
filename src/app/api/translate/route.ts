@@ -2,24 +2,6 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js"; 
 
-// 1. SAFEST APPROACH: Check standard variable, public variable, or fallback.
-// This prevents TypeScript from complaining and keeps your key hidden.
-const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
-
-if (!apiKey) {
-  console.warn("WARNING: Gemini API key is missing from environment variables.");
-}
-
-const ai = new GoogleGenAI({ apiKey: apiKey || "MISSING_KEY" });
-
-// Safeguard initialization so Vercel can build without crashing
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-
-const supabaseAdmin = supabaseUrl && supabaseServiceKey 
-  ? createClient(supabaseUrl, supabaseServiceKey)
-  : null;
-
 type TranslationColumns = "translation_en" | "translation_si" | "translation_ta";
 
 export async function POST(request: Request) {
@@ -27,7 +9,6 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { messageId, text, targetLanguage } = body;
 
-    // Enhanced logging to check exactly what the frontend is sending in production
     console.log("Incoming Translation Payload:", { messageId, text, targetLanguage });
 
     if (!text || !targetLanguage || !messageId) {
@@ -40,14 +21,28 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!supabaseAdmin) {
-      return NextResponse.json({ error: "Database configuration missing" }, { status: 500 });
+    // 1. DYNAMIC INITIALIZATION: Read variables inside the handler function block
+    const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    
+    // Fallback safely to public anon key if service key wasn't added to Vercel yet
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+
+    // Comprehensive Diagnostics if variables are missing
+    if (!apiKey) {
+      return NextResponse.json({ error: "Configuration Error: GEMINI_API_KEY is not defined in Vercel settings." }, { status: 500 });
+    }
+    if (!supabaseUrl || !supabaseKey) {
+      return NextResponse.json({ error: "Configuration Error: Supabase connection keys are missing." }, { status: 500 });
     }
 
+    // Initialize fresh instances per request invocation
+    const ai = new GoogleGenAI({ apiKey: apiKey });
+    const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
+
     let langColumn: TranslationColumns = "translation_en";
-    
-    // Normalize string casing to prevent matching failures
     const normalizedTarget = targetLanguage.toLowerCase();
+    
     if (normalizedTarget.includes("sinhala") || normalizedTarget.includes("සිංහල")) {
       langColumn = "translation_si";
     } else if (normalizedTarget.includes("tamil") || normalizedTarget.includes("தமிழ்")) {
@@ -73,30 +68,32 @@ export async function POST(request: Request) {
     // STEP 2: Call Gemini to translate it
     const prompt = `You are a professional real-time chat translator. Translate the following text exactly into ${targetLanguage}. Return ONLY the direct translation text. Do not add explanations, notes, or extra punctuation: "${text}"`;
 
-    // Make sure your Vercel Environment Key is named GEMINI_API_KEY
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: prompt,
     });
 
-    // Extracting text safely from the official @google/genai SDK response structure
     const candidateText = response.candidates?.[0]?.content?.parts?.[0]?.text;
     const translatedText = (candidateText || response.text || "").trim() || text;
 
-    // STEP 3: Save it permanently to that message row so it never translates again
+    // STEP 3: Save it permanently to that message row
     const { error: updateError } = await supabaseAdmin
       .from("messages")
       .update({ [langColumn]: translatedText })
       .eq("id", messageId);
 
     if (updateError) {
-      console.error("Supabase Admin Save Error:", updateError.message);
+      console.error("Supabase Database Update Error:", updateError.message);
+      // Return the translation anyway so the UI updates even if db logging fails
     }
 
     return NextResponse.json({ translatedText });
 
   } catch (error: any) {
     console.error("Critical Route Error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ 
+      error: "Internal Server Exception",
+      message: error?.message || String(error)
+    }, { status: 500 });
   }
 }
