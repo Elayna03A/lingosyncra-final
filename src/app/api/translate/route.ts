@@ -2,10 +2,16 @@ import { NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js"; 
 
-// Initialize the Google Gen AI client. 
-// It will automatically read process.env.GEMINI_API_KEY natively.
-// Pass an empty object so the SDK initializes correctly and pulls GEMINI_API_KEY from your environment variables natively.
-const ai = new GoogleGenAI({});
+// 1. SAFEST APPROACH: Check standard variable, public variable, or fallback.
+// This prevents TypeScript from complaining and keeps your key hidden.
+const apiKey = process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+
+if (!apiKey) {
+  console.warn("WARNING: Gemini API key is missing from environment variables.");
+}
+
+const ai = new GoogleGenAI({ apiKey: apiKey || "MISSING_KEY" });
+
 // Safeguard initialization so Vercel can build without crashing
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
