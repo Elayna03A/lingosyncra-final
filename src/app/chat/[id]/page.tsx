@@ -136,7 +136,9 @@ export default function ChatPage() {
       if (history) {
         setMessages(history);
         history.forEach((msg) => {
-          translateIncomingMessage(msg, initialLangName, user.id);
+          if (String(msg.sender_id) !== String(user.id)) {
+            translateIncomingMessage(msg, initialLangName, user.id);
+          }
         });
       }
     };
@@ -157,11 +159,13 @@ export default function ChatPage() {
     setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
 
     messages.forEach((msg) => {
-      translateIncomingMessage(msg, langName, currentUserId);
+      if (String(msg.sender_id) !== String(currentUserId)) {
+        translateIncomingMessage(msg, langName, currentUserId);
+      }
     });
   };
 
-  // 2. Realtime Listener + Custom In-App Toast Notification (EDITED SECTION)
+  // 2. Realtime Listener (FIXED: Added partner logic guard & removed chat message toast notification)
   useEffect(() => {
     if (!activeChatId || !currentUserId) return;
     const safeChatId = String(activeChatId).trim();
@@ -180,37 +184,9 @@ export default function ChatPage() {
               return [...prev, newData];
             });
 
-            translateIncomingMessage(newData, targetLanguage, currentUserId);
-
-            // Trigger internal request-style notification if sent by the partner
-            const isFromPartner = String(newData.sender_id) !== String(currentUserId);
-            if (isFromPartner) {
-              toast.custom((t) => (
-                <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-slate-800 shadow-2xl rounded-2xl pointer-events-auto flex ring-1 ring-black ring-opacity-5 border border-slate-700 p-4`}>
-                  <div className="flex-1 w-0">
-                    <div className="flex items-start">
-                      <div className="shrink-0 pt-0.5">
-                        <div className="h-10 w-10 rounded-full bg-linear-to-tr from-blue-500 to-emerald-500 flex items-center justify-center font-bold text-white uppercase">
-                          {contactName ? contactName[0] : "U"}
-                        </div>
-                      </div>
-                      <div className="ml-3 flex-1">
-                        <p className="text-sm font-bold text-white">
-                          New Message from {contactName}
-                        </p>
-                        <p className="mt-1 text-sm text-slate-300 truncate max-w-60">
-                          {newData.content}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="ml-4 shrink-0 flex items-center">
-                    <button onClick={() => toast.dismiss(t.id)} className="rounded-xl p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 transition-colors">
-                      <X size={18} />
-                    </button>
-                  </div>
-                </div>
-              ), { id: newData.id, duration: 4000 });
+            // FIXED: Only process translation if it's an incoming message from your partner
+            if (String(newData.sender_id) !== String(currentUserId)) {
+              translateIncomingMessage(newData, targetLanguage, currentUserId);
             }
 
           } else if (payload.eventType === 'UPDATE') {
@@ -225,7 +201,7 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeChatId, currentUserId, targetLanguage, contactName]); 
+  }, [activeChatId, currentUserId, targetLanguage]); 
 
   // 3. Send Message
   const handleSendMessage = async () => {
