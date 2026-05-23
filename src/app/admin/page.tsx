@@ -37,11 +37,10 @@ export default function AdminDashboard() {
           return;
         }
 
-        // Fetch User Stats with full error checking
+        // Fetch User Stats safely without requesting the missing created_at field
         const { data, error: fetchError } = await supabase
           .from('profiles')
-          .select('*') // Grabs everything available safely
-          .order('created_at', { ascending: false });
+          .select('*'); // Grabs existing columns safely without broken order dependencies
 
         if (fetchError) {
           throw fetchError;
@@ -110,7 +109,7 @@ export default function AdminDashboard() {
           <table className="w-full text-left">
             <thead className="bg-slate-700/50 text-slate-300">
               <tr>
-                <th className="p-4">User Details / ID</th>
+                <th className="p-4">User Details</th>
                 <th className="p-4">Joined Date</th>
                 <th className="p-4">Role</th>
               </tr>
@@ -125,16 +124,18 @@ export default function AdminDashboard() {
               ) : (
                 users.map((u, i) => (
                   <tr key={u.id || i} className="border-t border-slate-700 hover:bg-slate-700/30">
-                    <td className="p-4 font-medium flex flex-col">
-                      <span>{u.email || "No Email Provided"}</span>
-                      <span className="text-xs text-slate-500 font-mono tracking-tight">{u.id}</span>
+                    <td className="p-4 font-medium flex flex-col gap-0.5">
+                      {/* Displays Full Name if available, otherwise defaults to Email */}
+                      <span className="text-slate-200 font-semibold">{u.full_name || u.email || "Unnamed User"}</span>
+                      {u.full_name && u.email && <span className="text-xs text-slate-400">{u.email}</span>}
+                      <span className="text-[10px] text-slate-500 font-mono tracking-tight select-all">ID: {u.id.substring(0, 8)}...</span>
                     </td>
-                    <td className="p-4 text-slate-400">
-                      {u.created_at ? new Date(u.created_at).toLocaleDateString() : "Unknown"}
+                    <td className="p-4 text-slate-400 text-sm">
+                      {u.created_at ? new Date(u.created_at).toLocaleDateString() : "Unavailable"}
                     </td>
                     <td className="p-4">
                       <span className={`px-2 py-1 rounded text-xs tracking-wide uppercase font-semibold ${u.role === 'admin' ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60' : 'bg-blue-950 text-blue-400 border border-blue-800/60'}`}>
-                        {u.role || 'authenticated'}
+                        {u.role || 'user'}
                       </span>
                     </td>
                   </tr>
