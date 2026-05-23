@@ -14,7 +14,7 @@ export default function Dashboard() {
   const [saveName, setSaveName] = useState(""); 
   const [isRequestsModalOpen, setIsRequestsModalOpen] = useState(false);
   const [pendingRequests, setPendingRequests] = useState<any[]>([]); 
-  const [userRole, setUserRole] = useState("user");
+  const [userRole, setUserRole] = useState<string>("user");
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   // Pulls chat rows and dynamically pairs up display profiles
@@ -31,7 +31,7 @@ export default function Dashboard() {
 
     if (!chatsData) return;
 
-    // Fetch dynamic profiles data (both full_name and email) to cross-reference display logic
+    // Fetch dynamic profiles data
     const { data: profilesData } = await supabase
       .from('profiles')
       .select('id, email, full_name');
@@ -47,7 +47,6 @@ export default function Dashboard() {
       user_2_profile_name: profileNameMap.get(chat.user_2) || null
     }));
 
-    // Distribute into respective state containers
     setContacts(mappedChats.filter((c: any) => c.status === 'accepted'));
     setPendingRequests(mappedChats.filter((c: any) => c.status === 'pending' && c.user_2 === userId));
   };
@@ -56,21 +55,38 @@ export default function Dashboard() {
     let chatChannel: any;
 
     const setupDashboardData = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      // Use getUser() to strictly verify session state with the database
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      
+      if (authError || !user) {
+        console.log("No valid auth session found, redirecting to login.");
+        router.push("/login");
+        return;
+      }
       
       setCurrentUser(user);
+      await fetchAndSetChats(user.id);
       
-      const { data: profile } = await supabase
+      // Fetch user profile role explicitly
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('role')
         .eq('id', user.id)
         .single();
-      if (profile) setUserRole(profile.role);
 
-      await fetchAndSetChats(user.id);
+      if (profileError) {
+        console.error("Error fetching role from public.profiles table:", profileError.message);
+      }
 
-      // Real-time state channel pipeline with fallback mechanisms
+      if (profile?.role) {
+        console.log("Current User Role Verified:", profile.role);
+        setUserRole(profile.role.toLowerCase().trim());
+      } else {
+        console.log("No role column resolved. Defaulting account to 'user' permissions.");
+        setUserRole("user");
+      }
+
+      // Real-time state channel pipeline
       chatChannel = supabase
         .channel('realtime-chats-dashboard')
         .on(
@@ -82,9 +98,7 @@ export default function Dashboard() {
           }
         )
         .subscribe((status) => {
-          // Fallback mechanism: If WebSocket fails or times out, trigger manual fetch backup
           if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
-            console.log("Realtime channel connection down, running backup pull.");
             fetchAndSetChats(user.id);
           }
         });
@@ -92,10 +106,18 @@ export default function Dashboard() {
 
     setupDashboardData();
 
+    // Listen for global auth changes (sign-outs, token refreshes)
+    const { data: { subscription: authListener } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        router.push("/login");
+      }
+    });
+
     return () => {
       if (chatChannel) supabase.removeChannel(chatChannel);
+      if (authListener) authListener.unsubscribe();
     };
-  }, []);
+  }, [router]);
 
   const handleAddContact = async () => {
     if (!searchEmail || !saveName) {
@@ -129,7 +151,6 @@ export default function Dashboard() {
       }]);
 
     if (insertError) {
-      console.error("Insert error details:", insertError);
       toast.error(`Error sending invite: ${insertError.message}`);
     } else {
       toast.success("Invite sent successfully!");
@@ -140,29 +161,23 @@ export default function Dashboard() {
     }
   };
 
-  // FIXED: No longer uses window.prompt(). Quietly auto-accepts and refreshes state arrays
   const handleAcceptInvite = async (chatId: string) => {
     const incomingRequest = pendingRequests.find((r) => r.id === chatId);
-    
-    // Automatically determine a local nickname utilizing the sender's email structure
-    const autoNickname = incomingRequest?.sender_email 
-      ? incomingRequest.sender_email.split('@')[0] 
-      : "Chat Partner";
+    const autoNickname = incomingRequest?.sender_email ? incomingRequest.sender_email.split('@')[0] : "Chat Partner";
 
     const { error } = await supabase
       .from('chats')
       .update({ 
         status: 'accepted',
-        user_2_name: autoNickname // Silently populate the column value to unlock grid cards
+        user_2_name: autoNickname 
       })
       .eq('id', chatId);
 
     if (!error) {
       toast.success("Invite Accepted!");
-      setIsRequestsModalOpen(false); // Close modal completely
+      setIsRequestsModalOpen(false); 
       if (currentUser) await fetchAndSetChats(currentUser.id); 
     } else {
-      console.error("Accept error details:", error);
       toast.error(`Failed to accept: ${error.message}`);
     }
   };
@@ -178,9 +193,13 @@ export default function Dashboard() {
       setIsRequestsModalOpen(false); 
       if (currentUser) await fetchAndSetChats(currentUser.id); 
     } else {
-      console.error("Decline error details:", error);
       toast.error(`Failed to decline: ${error.message}`);
     }
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push("/login");
   };
   
   return (
@@ -208,28 +227,29 @@ export default function Dashboard() {
         </div>
         
         <nav className="mt-4 space-y-2 px-6">
-          <button className="flex items-center gap-4 w-full p-4 bg-blue-600 rounded-2xl font-bold text-sm shadow-lg shadow-blue-900/20">
+          <button className="flex items-center gap-4 w-full p-4 bg-blue-600 rounded-2xl font-bold text-sm shadow-lg shadow-blue-900/20 cursor-pointer">
             <MessageSquare size={18}/> Chats
           </button>
           
           <button 
             onClick={() => router.push("/profile")} 
-            className="flex items-center gap-4 w-full p-4 hover:bg-slate-700/50 rounded-2xl text-slate-300 text-sm transition-all"
+            className="flex items-center gap-4 w-full p-4 hover:bg-slate-700/50 rounded-2xl text-slate-300 text-sm transition-all cursor-pointer"
           >
             <User size={18}/> Profile
           </button>   
 
+          {/* DYNAMIC RENDERING: Admin Panel Access Link */}
           {userRole === 'admin' && (
             <button 
               onClick={() => router.push("/admin")} 
-              className="flex items-center gap-4 w-full p-4 hover:bg-emerald-900/20 text-emerald-400 rounded-2xl border border-emerald-900/30 text-sm transition-all"
+              className="flex items-center gap-4 w-full p-4 bg-emerald-950/40 hover:bg-emerald-900/40 text-emerald-400 rounded-2xl border border-emerald-500/30 text-sm font-semibold transition-all cursor-pointer animate-in fade-in duration-200"
             >
-              <ShieldCheck size={18}/> Admin Panel
+              <ShieldCheck size={18} className="text-emerald-400" /> Admin Panel
             </button>
           )}        
           
           <div className="pt-10">
-            <button onClick={() => router.push("/login")} className="flex items-center gap-4 w-full p-4 hover:bg-red-900/20 text-red-400 rounded-2xl text-sm transition-all">
+            <button onClick={handleLogout} className="flex items-center gap-4 w-full p-4 hover:bg-red-900/20 text-red-400 rounded-2xl text-sm transition-all cursor-pointer">
               <LogOut size={18}/> Logout
             </button>
           </div>
@@ -268,7 +288,7 @@ export default function Dashboard() {
           </div>
         </header>
 
-        {/* Contacts Display Grid */}
+        {/* Contacts Grid Layout */}
         {contacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-80 border-2 border-dashed border-slate-800 rounded-[2.5rem] bg-slate-800/20 px-6 text-center">
             <div className="p-5 bg-slate-800 rounded-3xl mb-4">
@@ -281,13 +301,9 @@ export default function Dashboard() {
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 xl:grid-cols-3">
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
-              
-              // FIXED PERSPECTIVE CHECKS: Get the details of the partner
               const partnerProfileName = isCurrentUserSender ? chat.user_2_profile_name : chat.user_1_profile_name;
               const partnerBackupName = isCurrentUserSender ? chat.user_2_name : chat.user_1_name;
               const partnerEmail = isCurrentUserSender ? chat.receiver_email : chat.sender_email;
-
-              // Priority: Dynamic Profile Name -> Explicit custom nickname field -> Profile account email -> Default
               const displayName = partnerProfileName || partnerBackupName || partnerEmail || "Chat Partner";
 
               return (
@@ -317,11 +333,9 @@ export default function Dashboard() {
 
       {/* --- ADD CONTACT MODAL --- */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
-          <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl overflow-hidden relative">
-            <div className="absolute top-0 left-0 w-full h-2 bg-linear-to-r from-emerald-500 to-blue-500"></div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md">
+          <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl relative">
             <h2 className="text-2xl font-black mb-8">Add New Contact</h2>
-            
             <div className="space-y-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Account Email</label>
@@ -333,7 +347,6 @@ export default function Dashboard() {
                   onChange={(e) => setSearchEmail(e.target.value)}
                 />
               </div>
-
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Identify As</label>
                 <input 
@@ -344,18 +357,11 @@ export default function Dashboard() {
                   onChange={(e) => setSaveName(e.target.value)}
                 />
               </div>
-
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
-                <button 
-                  onClick={() => setIsAddModalOpen(false)} 
-                  className="order-2 sm:order-1 flex-1 p-4 rounded-2xl bg-slate-700 font-bold hover:bg-slate-600 transition-all text-sm"
-                >
+                <button onClick={() => setIsAddModalOpen(false)} className="order-2 sm:order-1 flex-1 p-4 rounded-2xl bg-slate-700 font-bold hover:bg-slate-600 transition-all text-sm">
                   Cancel
                 </button>
-                <button 
-                  onClick={handleAddContact} 
-                  className="order-1 sm:order-2 flex-1 p-4 rounded-2xl bg-emerald-600 font-bold hover:bg-emerald-500 transition-all shadow-lg shadow-emerald-900/40 text-sm"
-                >
+                <button onClick={handleAddContact} className="order-1 sm:order-2 flex-1 p-4 rounded-2xl bg-emerald-600 font-bold hover:bg-emerald-500 transition-all text-sm">
                   Send Invite
                 </button>
               </div>
@@ -366,9 +372,8 @@ export default function Dashboard() {
 
       {/* --- INCOMING REQUESTS MODAL --- */}
       {isRequestsModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md animate-in fade-in duration-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/90 backdrop-blur-md">
           <div className="w-full max-w-md bg-slate-800 border border-slate-700 p-8 rounded-[2.5rem] shadow-2xl relative">
-            <div className="absolute top-0 left-0 w-full h-2 bg-linear-to-r from-blue-500 to-emerald-500"></div>
             <div className="flex justify-between items-center mb-8">
               <h2 className="text-2xl font-black">Invitations</h2>
               <button onClick={() => setIsRequestsModalOpen(false)} className="p-2 hover:bg-slate-700 rounded-xl transition-colors">
@@ -378,46 +383,30 @@ export default function Dashboard() {
 
             {pendingRequests.length === 0 ? (
               <div className="text-center py-12">
-                <div className="w-16 h-16 bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-4 border border-slate-700">
-                  <MessageSquare size={24} className="text-slate-600" />
-                </div>
                 <p className="text-slate-500 font-medium">Your inbox is clean!</p>
               </div>
             ) : (
               <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
-                {pendingRequests.map((request) => {
-                  const requestSenderEmail = request.sender_email;
-
-                  return (
-                    <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center font-bold text-blue-400 uppercase">
-                          {requestSenderEmail[0]}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="font-bold text-sm truncate">{requestSenderEmail}</p>
-                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
-                            Wants to connect as: <span className="text-blue-400 normal-case font-medium">{request.user_1_name || "New Friend"}</span>
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button 
-                          onClick={() => handleAcceptInvite(request.id)}
-                          className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-black transition-all"
-                        >
-                          Accept
-                        </button>
-                        <button 
-                          onClick={() => handleDeclineInvite(request.id)}
-                          className="flex-1 py-3 bg-slate-800 hover:bg-red-600/20 hover:text-red-400 rounded-xl text-xs font-bold transition-all border border-slate-700"
-                        >
-                          Decline
-                        </button>
+                {pendingRequests.map((request) => (
+                  <div key={request.id} className="p-5 bg-slate-900 border border-slate-700 rounded-3xl flex flex-col gap-4">
+                    <div className="flex items-center gap-4">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-sm truncate">{request.sender_email}</p>
+                        <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">
+                          Wants to connect as: <span className="text-blue-400 normal-case font-medium">{request.user_1_name || "New Friend"}</span>
+                        </p>
                       </div>
                     </div>
-                  );
-                })}
+                    <div className="flex gap-2">
+                      <button onClick={() => handleAcceptInvite(request.id)} className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-black transition-all">
+                        Accept
+                      </button>
+                      <button onClick={() => handleDeclineInvite(request.id)} className="flex-1 py-3 bg-slate-800 hover:bg-red-600/20 hover:text-red-400 rounded-xl text-xs font-bold transition-all border border-slate-700">
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
