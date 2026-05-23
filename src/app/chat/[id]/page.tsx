@@ -78,7 +78,7 @@ export default function ChatPage() {
     }
   };
 
-  // 1. Initial Load Fetcher (FIXED TIMING LOGIC)
+  // 1. Initial Load Fetcher (FIXED PERSPECTIVE LOGIC VIA RELATIONSHIPS)
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -97,13 +97,24 @@ export default function ChatPage() {
       if (chatRow) {
         setChatMeta(chatRow);
         
-        // FIX: Compare against local scoped variables 'user.id' directly to prevent asynchronous state delay mismatch
         const isIUser1 = chatRow.user_1 === user.id;
         
-        // If I am User 1, show User 2's name. If I am User 2, show User 1's name.
-        const activeName = isIUser1 
+        // Find out the ID of the OTHER user in this chat
+        const partnerId = isIUser1 ? chatRow.user_2 : chatRow.user_1;
+
+        // DYNAMIC LOOKUP: Fetch the partner's actual profile name from the profiles table
+        const { data: partnerProfile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', partnerId)
+          .single();
+
+        // Fall back to the row strings if the profiles table doesn't have a name yet
+        const backupName = isIUser1 
           ? (chatRow.user_2_name || "Chat Partner") 
           : (chatRow.user_1_name || "Chat Partner");
+
+        const activeName = partnerProfile?.full_name || backupName;
         
         setContactName(activeName);
         setEditName(activeName);
