@@ -161,15 +161,10 @@ export default function ChatPage() {
     });
   };
 
-  // 2. Realtime Listener + Unread Notification Triggers (EDITED SECTION)
+  // 2. Realtime Listener + Custom In-App Toast Notification (EDITED SECTION)
   useEffect(() => {
     if (!activeChatId || !currentUserId) return;
     const safeChatId = String(activeChatId).trim();
-
-    // Ask for browser push permissions if not yet granted/denied
-    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
-      Notification.requestPermission();
-    }
 
     const channel = supabase
       .channel(`chat-room-global-${safeChatId}`)
@@ -187,26 +182,35 @@ export default function ChatPage() {
 
             translateIncomingMessage(newData, targetLanguage, currentUserId);
 
-            // Notification handling for partner messages
+            // Trigger internal request-style notification if sent by the partner
             const isFromPartner = String(newData.sender_id) !== String(currentUserId);
             if (isFromPartner) {
-              if (document.hidden) {
-                // Window is unfocused/minimized -> Native Push Alert
-                if ("Notification" in window && Notification.permission === "granted") {
-                  new Notification(`New message from ${contactName}`, {
-                    body: newData.content,
-                  });
-                } else {
-                  toast(`💬 ${contactName}: ${newData.content}`, { id: newData.id });
-                }
-              } else {
-                // Window is visible -> Clean app notification toast
-                toast.success(`New message from ${contactName}`, {
-                  icon: '💬',
-                  duration: 3000,
-                  id: newData.id
-                });
-              }
+              toast.custom((t) => (
+                <div className={`${t.visible ? 'animate-enter' : 'animate-leave'} max-w-md w-full bg-slate-800 shadow-2xl rounded-2xl pointer-events-auto flex ring-1 ring-black ring-opacity-5 border border-slate-700 p-4`}>
+                  <div className="flex-1 w-0">
+                    <div className="flex items-start">
+                      <div className="shrink-0 pt-0.5">
+                        <div className="h-10 w-10 rounded-full bg-linear-to-tr from-blue-500 to-emerald-500 flex items-center justify-center font-bold text-white uppercase">
+                          {contactName ? contactName[0] : "U"}
+                        </div>
+                      </div>
+                      <div className="ml-3 flex-1">
+                        <p className="text-sm font-bold text-white">
+                          New Message from {contactName}
+                        </p>
+                        <p className="mt-1 text-sm text-slate-300 truncate max-w-60">
+                          {newData.content}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="ml-4 shrink-0 flex items-center">
+                    <button onClick={() => toast.dismiss(t.id)} className="rounded-xl p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-700/50 transition-colors">
+                      <X size={18} />
+                    </button>
+                  </div>
+                </div>
+              ), { id: newData.id, duration: 4000 });
             }
 
           } else if (payload.eventType === 'UPDATE') {
@@ -223,7 +227,7 @@ export default function ChatPage() {
     };
   }, [activeChatId, currentUserId, targetLanguage, contactName]); 
 
-  // 3. Send Message (EDITED SECTION - Added .select().single() to solve undefined ID bugs)
+  // 3. Send Message
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
@@ -240,7 +244,7 @@ export default function ChatPage() {
         },
       ])
       .select()
-      .single(); // Grab directly returned row single instance structure
+      .single(); 
 
     if (insertError || !insertedMsg) {
       setMessage(originalText);
