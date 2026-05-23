@@ -34,12 +34,10 @@ export default function ChatPage() {
   }, [messages]);
 
   // Dynamic Translation Processor
-  const translateIncomingMessage = async (msg: any, currentLangName: string) => {
-    // Never translate our own sent messages locally
-    if (!currentUserId || String(msg.sender_id) === String(currentUserId)) return;
+  const translateIncomingMessage = async (msg: any, currentLangName: string, userIdString: string) => {
+    if (!userIdString || String(msg.sender_id) === String(userIdString)) return;
 
     try {
-      // Set a localized loading flag for this specific message row
       setMessages((prev) =>
         prev.map((m) => m.id === msg.id ? { ...m, _local_translating: true } : m)
       );
@@ -62,7 +60,6 @@ export default function ChatPage() {
                   ...m, 
                   _local_translation: cleanTranslation, 
                   _local_translating: false,
-                  // If the translation matches the original text exactly, we don't need a double bubble
                   _is_same: cleanTranslation.toLowerCase() === msg.content.toLowerCase()
                 }
               : m
@@ -85,7 +82,9 @@ export default function ChatPage() {
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) setCurrentUserId(user.id);
+      if (!user) return;
+      
+      setCurrentUserId(user.id);
 
       const { data: chatRow } = await supabase
         .from('chats')
@@ -95,7 +94,7 @@ export default function ChatPage() {
       
       let initialLangName = "English";
 
-      if (chatRow && user) {
+      if (chatRow) {
         setChatMeta(chatRow);
         const isCurrentUserSender = chatRow.user_1 === user.id;
         const activeName = isCurrentUserSender 
@@ -121,15 +120,9 @@ export default function ChatPage() {
 
       if (history) {
         setMessages(history);
-
-        // Run translation requests for all background history items from the partner
-        if (user) {
-          history.forEach((msg) => {
-            if (String(msg.sender_id) !== String(user.id)) {
-              translateIncomingMessage(msg, initialLangName);
-            }
-          });
-        }
+        history.forEach((msg) => {
+          translateIncomingMessage(msg, initialLangName, user.id);
+        });
       }
     };
 
@@ -148,11 +141,8 @@ export default function ChatPage() {
     await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
     setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
 
-    // Instantly re-translate all existing incoming items to the newly selected language
     messages.forEach((msg) => {
-      if (String(msg.sender_id) !== String(currentUserId)) {
-        translateIncomingMessage(msg, langName);
-      }
+      translateIncomingMessage(msg, langName, currentUserId);
     });
   };
 
@@ -175,9 +165,7 @@ export default function ChatPage() {
               return [...prev, newData];
             });
 
-            if (String(newData.sender_id) !== String(currentUserId)) {
-              translateIncomingMessage(newData, targetLanguage);
-            }
+            translateIncomingMessage(newData, targetLanguage, currentUserId);
           } else if (payload.eventType === 'UPDATE') {
             setMessages((prev) => 
               prev.map((msg) => msg.id === newData.id ? { ...msg, ...newData } : msg)
@@ -217,7 +205,6 @@ export default function ChatPage() {
     }
 
     const insertedMsg = insertedData[0];
-
     setMessages((prev) => {
       if (prev.some(m => m.id === insertedMsg.id)) return prev;
       return [...prev, insertedMsg];
@@ -227,11 +214,15 @@ export default function ChatPage() {
   const saveNewName = async () => {
     if (!editName || !chatMeta || !currentUserId || !activeChatId) return;
     const isUser1 = chatMeta.user_1 === currentUserId;
+    
+    // FIX: If I am User 1, editing the text field should modify user_2_name. 
+    // If I am User 2, it modifies user_1_name.
     const updatePayload = isUser1 ? { user_2_name: editName } : { user_1_name: editName };
 
     const { error } = await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
     if (!error) { 
       setContactName(editName); 
+      setChatMeta((prev: any) => prev ? { ...prev, ...updatePayload } : null);
       setIsEditing(false); 
       toast.success("Display name saved!"); 
     }
@@ -318,10 +309,8 @@ export default function ChatPage() {
               }`}>
                 
                 {isMe ? (
-                  /* SENDER BUBBLE */
                   <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                 ) : (
-                  /* RECEIVER BUBBLE */
                   <>
                     {isTranslating && (
                       <p className="text-[10px] text-slate-400 italic animate-pulse flex items-center gap-1">
@@ -331,16 +320,13 @@ export default function ChatPage() {
                     
                     {hasTranslationText && !isSameAsOriginal && (
                       <div className="flex flex-col gap-1">
-                        {/* Shows the clean translated phrase up top */}
                         <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg._local_translation}</p>
-                        {/* Secondary small subtitle label shows what they typed originally */}
                         <span className="text-[10px] text-slate-400 border-t border-slate-700/60 pt-1 mt-0.5 block">
                           Original: {msg.content}
                         </span>
                       </div>
                     )}
 
-                    {/* Fallback layout: Show original if no translation is ready, or if it matched exactly */}
                     {(!hasTranslationText || isSameAsOriginal) && !isTranslating && (
                       <p className="text-sm wrap-break-words whitespace-pre-wrap">{msg.content}</p>
                     )}
