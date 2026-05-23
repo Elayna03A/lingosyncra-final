@@ -45,7 +45,7 @@ export default function ChatPage() {
       const response = await fetch("/api/translate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: msg.content, targetLanguage: currentLangName }),
+        body: JSON.stringify({ messageId: msg.id, text: msg.content, targetLanguage: currentLangName }),
       });
 
       const resultData = await response.json();
@@ -161,10 +161,15 @@ export default function ChatPage() {
     });
   };
 
-  // 2. Realtime Listener
+  // 2. Realtime Listener + Unread Notification Triggers (EDITED SECTION)
   useEffect(() => {
     if (!activeChatId || !currentUserId) return;
     const safeChatId = String(activeChatId).trim();
+
+    // Ask for browser push permissions if not yet granted/denied
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
 
     const channel = supabase
       .channel(`chat-room-global-${safeChatId}`)
@@ -181,6 +186,29 @@ export default function ChatPage() {
             });
 
             translateIncomingMessage(newData, targetLanguage, currentUserId);
+
+            // Notification handling for partner messages
+            const isFromPartner = String(newData.sender_id) !== String(currentUserId);
+            if (isFromPartner) {
+              if (document.hidden) {
+                // Window is unfocused/minimized -> Native Push Alert
+                if ("Notification" in window && Notification.permission === "granted") {
+                  new Notification(`New message from ${contactName}`, {
+                    body: newData.content,
+                  });
+                } else {
+                  toast(`💬 ${contactName}: ${newData.content}`, { id: newData.id });
+                }
+              } else {
+                // Window is visible -> Clean app notification toast
+                toast.success(`New message from ${contactName}`, {
+                  icon: '💬',
+                  duration: 3000,
+                  id: newData.id
+                });
+              }
+            }
+
           } else if (payload.eventType === 'UPDATE') {
             setMessages((prev) => 
               prev.map((msg) => msg.id === newData.id ? { ...msg, ...newData } : msg)
@@ -193,16 +221,16 @@ export default function ChatPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [activeChatId, currentUserId, targetLanguage]); 
+  }, [activeChatId, currentUserId, targetLanguage, contactName]); 
 
-  // 3. Send Message
+  // 3. Send Message (EDITED SECTION - Added .select().single() to solve undefined ID bugs)
   const handleSendMessage = async () => {
     if (!message.trim() || !currentUserId || !activeChatId || !chatMeta) return;
 
     const originalText = message;
     setMessage(""); 
 
-    const { data: insertedData, error: insertError } = await supabase
+    const { data: insertedMsg, error: insertError } = await supabase
       .from("messages")
       .insert([
         {
@@ -211,15 +239,15 @@ export default function ChatPage() {
           content: originalText
         },
       ])
-      .select();
+      .select()
+      .single(); // Grab directly returned row single instance structure
 
-    if (insertError || !insertedData || insertedData.length === 0) {
+    if (insertError || !insertedMsg) {
       setMessage(originalText);
       toast.error("Message delivery failed");
       return;
     }
 
-    const insertedMsg = insertedData[0];
     setMessages((prev) => {
       if (prev.some(m => m.id === insertedMsg.id)) return prev;
       return [...prev, insertedMsg];
@@ -230,7 +258,6 @@ export default function ChatPage() {
     if (!editName || !chatMeta || !currentUserId || !activeChatId) return;
     const isUser1 = chatMeta.user_1 === currentUserId;
     
-    // FIX: If I am User 1, editing changes User 2's displayed name card, and vice-versa.
     const updatePayload = isUser1 ? { user_2_name: editName } : { user_1_name: editName };
 
     const { error } = await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
@@ -251,67 +278,61 @@ export default function ChatPage() {
     }
   };
 
- const handleDownloadXML = () => {
-  try {
-    // 1. Build the XML header structure
-    let xmlContent = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-    xmlContent += `<chat>\n`;
-    xmlContent += `  <info>\n`;
-    xmlContent += `    <partner>${contactName}</partner>\n`;
-    xmlContent += `    <my_target_language>${targetLanguage}</my_target_language>\n`;
-    xmlContent += `    <exported_at>${new Date().toISOString()}</exported_at>\n`;
-    xmlContent += `  </info>\n`;
-    xmlContent += `  <messages>\n`;
+  const handleDownloadXML = () => {
+    try {
+      let xmlContent = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+      xmlContent += `<chat>\n`;
+      xmlContent += `  <info>\n`;
+      xmlContent += `    <partner>${contactName}</partner>\n`;
+      xmlContent += `    <my_target_language>${targetLanguage}</my_target_language>\n`;
+      xmlContent += `    <exported_at>${new Date().toISOString()}</exported_at>\n`;
+      xmlContent += `  </info>\n`;
+      xmlContent += `  <messages>\n`;
 
-    // 2. Loop through all active chat messages in state
-    messages.forEach((msg) => {
-      const isMe = String(msg.sender_id) === String(currentUserId);
-      const senderLabel = isMe ? "Me" : contactName;
+      messages.forEach((msg) => {
+        const isMe = String(msg.sender_id) === String(currentUserId);
+        const senderLabel = isMe ? "Me" : contactName;
+        
+        const escapeXml = (str: string) => {
+          if (!str) return "";
+          return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&apos;");
+        };
+
+        xmlContent += `    <message id="${msg.id || ''}">\n`;
+        xmlContent += `      <sender>${escapeXml(senderLabel)}</sender>\n`;
+        xmlContent += `      <original_text>${escapeXml(msg.content)}</original_text>\n`;
+        
+        if (msg._local_translation) {
+          xmlContent += `      <translated_text>${escapeXml(msg._local_translation)}</translated_text>\n`;
+        }
+        
+        xmlContent += `      <timestamp>${msg.created_at || ''}</timestamp>\n`;
+        xmlContent += `    </message>\n`;
+      });
+
+      xmlContent += `  </messages>\n`;
+      xmlContent += `</chat>`;
+
+      const blob = new Blob([xmlContent], { type: "text/xml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${contactName.replace(/\s+/g, '_')}_history.xml`;
+      a.click();
       
-      // Helper function to escape special XML characters like &, <, >
-      const escapeXml = (str: string) => {
-        if (!str) return "";
-        return str
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;")
-          .replace(/'/g, "&apos;");
-      };
-
-      xmlContent += `    <message id="${msg.id || ''}">\n`;
-      xmlContent += `      <sender>${escapeXml(senderLabel)}</sender>\n`;
-      xmlContent += `      <original_text>${escapeXml(msg.content)}</original_text>\n`;
-      
-      // If a translation exists for this specific message row, include it
-      if (msg._local_translation) {
-        xmlContent += `      <translated_text>${escapeXml(msg._local_translation)}</translated_text>\n`;
-      }
-      
-      xmlContent += `      <timestamp>${msg.created_at || ''}</timestamp>\n`;
-      xmlContent += `    </message>\n`;
-    });
-
-    xmlContent += `  </messages>\n`;
-    xmlContent += `</chat>`;
-
-    // 3. Create the file download trigger
-    const blob = new Blob([xmlContent], { type: "text/xml" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${contactName.replace(/\s+/g, '_')}_history.xml`;
-    a.click();
-    
-    // Clean up memory
-    URL.revokeObjectURL(url);
-    toast.success("XML file downloaded with history!");
-  } catch (e) { 
-    console.error("XML compilation error:", e);
-    toast.error("Download failed"); 
-  }
-  setIsSettingsOpen(false);
-};
+      URL.revokeObjectURL(url);
+      toast.success("XML file downloaded with history!");
+    } catch (e) { 
+      console.error("XML compilation error:", e);
+      toast.error("Download failed"); 
+    }
+    setIsSettingsOpen(false);
+  };
 
   return (
     <div className="flex flex-col h-screen bg-slate-900 text-white">
