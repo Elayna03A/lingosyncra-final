@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useRouter } from "next/navigation";
-import { Users, ArrowLeft, ShieldCheck, AlertCircle, Loader2 } from "lucide-react";
+import { Users, ArrowLeft, ShieldCheck, AlertCircle, Loader2, AlertTriangle } from "lucide-react";
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState<any[]>([]);
@@ -37,10 +37,10 @@ export default function AdminDashboard() {
           return;
         }
 
-        // Fetch User Stats safely without requesting the missing created_at field
+        // Fetch User Stats safely
         const { data, error: fetchError } = await supabase
           .from('profiles')
-          .select('*'); // Grabs existing columns safely without broken order dependencies
+          .select('*'); 
 
         if (fetchError) {
           throw fetchError;
@@ -84,7 +84,7 @@ export default function AdminDashboard() {
           </button>
         </header>
 
-        {/* Display RLS Policy Errors or Column Mismatch Alerts if they occur */}
+        {/* Display RLS Policy Errors or Column Mismatch Alerts */}
         {errorMessage && (
           <div className="mb-6 p-4 bg-red-950/40 border border-red-800 text-red-200 rounded-2xl flex items-start gap-3">
             <AlertCircle className="text-red-400 shrink-0 mt-0.5" size={20} />
@@ -110,6 +110,7 @@ export default function AdminDashboard() {
             <thead className="bg-slate-700/50 text-slate-300">
               <tr>
                 <th className="p-4">User Details</th>
+                <th className="p-4">Age</th>
                 <th className="p-4">Joined Date</th>
                 <th className="p-4">Role</th>
               </tr>
@@ -117,19 +118,34 @@ export default function AdminDashboard() {
             <tbody>
               {users.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="p-8 text-center text-slate-500">
-                    No records found. If RLS is enabled, ensure your user profile has explicit read authorization.
+                  <td colSpan={4} className="p-8 text-center text-slate-500">
+                    No records found.
                   </td>
                 </tr>
               ) : (
                 users.map((u, i) => (
                   <tr key={u.id || i} className="border-t border-slate-700 hover:bg-slate-700/30">
                     <td className="p-4 font-medium flex flex-col gap-0.5">
-                      {/* Displays Full Name if available, otherwise defaults to Email */}
                       <span className="text-slate-200 font-semibold">{u.full_name || u.email || "Unnamed User"}</span>
                       {u.full_name && u.email && <span className="text-xs text-slate-400">{u.email}</span>}
                       <span className="text-[10px] text-slate-500 font-mono tracking-tight select-all">ID: {u.id.substring(0, 8)}...</span>
                     </td>
+                    
+                    {/* Age Column with compliance flags */}
+                    <td className="p-4 text-slate-200 font-medium">
+                      {u.age ? (
+                        u.age < 16 ? (
+                          <span className="text-red-400 flex items-center gap-1 bg-red-950/40 px-2 py-0.5 rounded-lg border border-red-900 w-fit text-sm">
+                            <AlertTriangle size={14} /> {u.age} (Underage)
+                          </span>
+                        ) : (
+                          <span>{u.age} y/o</span>
+                        )
+                      ) : (
+                        <span className="text-slate-500 italic text-sm">Not Provided</span>
+                      )}
+                    </td>
+
                     <td className="p-4 text-slate-400 text-sm">
                       {u.created_at ? new Date(u.created_at).toLocaleDateString() : "Unavailable"}
                     </td>
