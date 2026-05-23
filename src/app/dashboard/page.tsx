@@ -31,17 +31,20 @@ export default function Dashboard() {
 
     if (!chatsData) return;
 
-    // Fetch profile table records to fall back onto emails if names are missing
+    // Fetch dynamic profiles data (both full_name and email) to cross-reference display logic
     const { data: profilesData } = await supabase
       .from('profiles')
-      .select('id, email');
+      .select('id, email, full_name');
 
-    const profileMap = new Map(profilesData?.map(p => [p.id, p.email]) || []);
+    const profileEmailMap = new Map(profilesData?.map(p => [p.id, p.email]) || []);
+    const profileNameMap = new Map(profilesData?.map(p => [p.id, p.full_name]) || []);
 
     const mappedChats = chatsData.map((chat: any) => ({
       ...chat,
-      sender_email: profileMap.get(chat.user_1) || "Unknown Sender",
-      receiver_email: profileMap.get(chat.user_2) || "Unknown Receiver"
+      sender_email: profileEmailMap.get(chat.user_1) || "Unknown Sender",
+      receiver_email: profileEmailMap.get(chat.user_2) || "Unknown Receiver",
+      user_1_profile_name: profileNameMap.get(chat.user_1) || null,
+      user_2_profile_name: profileNameMap.get(chat.user_2) || null
     }));
 
     // Distribute into respective state containers
@@ -279,10 +282,13 @@ export default function Dashboard() {
             {contacts.map((chat: any) => {
               const isCurrentUserSender = chat.user_1 === currentUser?.id;
               
-              // FIXED: Swapped mappings so you don't look at your own name
-              const displayName = isCurrentUserSender 
-                ? (chat.user_1_name || chat.receiver_email || "Chat Partner") 
-                : (chat.user_2_name || chat.sender_email || "Chat Partner");
+              // FIXED PERSPECTIVE CHECKS: Get the details of the partner
+              const partnerProfileName = isCurrentUserSender ? chat.user_2_profile_name : chat.user_1_profile_name;
+              const partnerBackupName = isCurrentUserSender ? chat.user_2_name : chat.user_1_name;
+              const partnerEmail = isCurrentUserSender ? chat.receiver_email : chat.sender_email;
+
+              // Priority: Dynamic Profile Name -> Explicit custom nickname field -> Profile account email -> Default
+              const displayName = partnerProfileName || partnerBackupName || partnerEmail || "Chat Partner";
 
               return (
                 <div 
