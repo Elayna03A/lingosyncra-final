@@ -78,7 +78,7 @@ export default function ChatPage() {
     }
   };
 
-  // 1. Initial Load Fetcher
+  // 1. Initial Load Fetcher (FIXED TIMING LOGIC)
   useEffect(() => {
     const fetchChatData = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -97,7 +97,7 @@ export default function ChatPage() {
       if (chatRow) {
         setChatMeta(chatRow);
         
-        // Check if the current user is User 1
+        // FIX: Compare against local scoped variables 'user.id' directly to prevent asynchronous state delay mismatch
         const isIUser1 = chatRow.user_1 === user.id;
         
         // If I am User 1, show User 2's name. If I am User 2, show User 1's name.
@@ -219,8 +219,7 @@ export default function ChatPage() {
     if (!editName || !chatMeta || !currentUserId || !activeChatId) return;
     const isUser1 = chatMeta.user_1 === currentUserId;
     
-    // FIX: If I am User 1, editing the text field should modify user_2_name. 
-    // If I am User 2, it modifies user_1_name.
+    // FIX: If I am User 1, editing changes User 2's displayed name card, and vice-versa.
     const updatePayload = isUser1 ? { user_2_name: editName } : { user_1_name: editName };
 
     const { error } = await supabase.from('chats').update(updatePayload).eq('id', activeChatId);
