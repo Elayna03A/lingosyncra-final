@@ -16,10 +16,20 @@ type TranslationColumns = "translation_en" | "translation_si" | "translation_ta"
 
 export async function POST(request: Request) {
   try {
-    const { messageId, text, targetLanguage } = await request.json();
+    const body = await request.json();
+    const { messageId, text, targetLanguage } = body;
+
+    // Enhanced logging to check exactly what the frontend is sending in production
+    console.log("Incoming Translation Payload:", { messageId, text, targetLanguage });
 
     if (!text || !targetLanguage || !messageId) {
-      return NextResponse.json({ error: "Missing parameters" }, { status: 400 });
+      return NextResponse.json(
+        { 
+          error: "Missing parameters", 
+          received: { messageId: !!messageId, text: !!text, targetLanguage: !!targetLanguage } 
+        }, 
+        { status: 400 }
+      );
     }
 
     if (!supabaseAdmin) {
@@ -28,9 +38,11 @@ export async function POST(request: Request) {
 
     let langColumn: TranslationColumns = "translation_en";
     
-    if (targetLanguage.includes("Sinhala")) {
+    // Normalize string casing to prevent matching failures
+    const normalizedTarget = targetLanguage.toLowerCase();
+    if (normalizedTarget.includes("sinhala") || normalizedTarget.includes("සිංහල")) {
       langColumn = "translation_si";
-    } else if (targetLanguage.includes("Tamil")) {
+    } else if (normalizedTarget.includes("tamil") || normalizedTarget.includes("தமிழ்")) {
       langColumn = "translation_ta";
     }
 
@@ -48,7 +60,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // STEP 2: If it wasn't saved, call Gemini to translate it
+    // STEP 2: Call Gemini to translate it
     const prompt = `You are a professional real-time chat translator. Translate the following text exactly into ${targetLanguage}. Return ONLY the direct translation text. Do not add explanations, notes, or extra punctuation: "${text}"`;
 
     const response = await ai.models.generateContent({
@@ -56,13 +68,20 @@ export async function POST(request: Request) {
       contents: prompt,
     });
 
-    const translatedText = response.text?.trim() || text;
+    // FIXED: Correct parsing for the modern official @google/genai SDK
+    // The response text is extracted cleanly via candidates or direct text helper depending on the version
+    const candidateText = response.candidates?.[0]?.content?.parts?.[0]?.text;
+    const translatedText = (candidateText || response.text || "").trim() || text;
 
     // STEP 3: Save it permanently to that message row so it never translates again
-    await supabaseAdmin
+    const { error: updateError } = await supabaseAdmin
       .from("messages")
       .update({ [langColumn]: translatedText })
       .eq("id", messageId);
+
+    if (updateError) {
+      console.error("Supabase Admin Save Error:", updateError.message);
+    }
 
     return NextResponse.json({ translatedText });
 
