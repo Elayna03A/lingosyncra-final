@@ -96,15 +96,19 @@ export default function ChatPage() {
 
       if (chatRow) {
         setChatMeta(chatRow);
-        const isCurrentUserSender = chatRow.user_1 === user.id;
-        const activeName = isCurrentUserSender 
+        
+        // Check if the current user is User 1
+        const isIUser1 = chatRow.user_1 === user.id;
+        
+        // If I am User 1, show User 2's name. If I am User 2, show User 1's name.
+        const activeName = isIUser1 
           ? (chatRow.user_2_name || "Chat Partner") 
           : (chatRow.user_1_name || "Chat Partner");
         
         setContactName(activeName);
         setEditName(activeName);
 
-        const savedLangCode = isCurrentUserSender ? chatRow.user_1_lang : chatRow.user_2_lang;
+        const savedLangCode = isIUser1 ? chatRow.user_1_lang : chatRow.user_2_lang;
         const matchedLang = languages.find(l => l.code === savedLangCode);
         if (matchedLang) {
           setTargetLanguage(matchedLang.name);
