@@ -170,6 +170,7 @@ export default function ChatPage() {
     if (!activeChatId || !currentUserId) return;
     const safeChatId = String(activeChatId).trim();
 
+    //Initiates the WebSocket / TCP Connection handshake
     const channel = supabase
       .channel(`chat-room-global-${safeChatId}`)
       .on(
@@ -184,7 +185,7 @@ export default function ChatPage() {
               return [...prev, newData];
             });
 
-            // FIXED: Only process translation if it's an incoming message from your partner
+            // Only process translation if it's an incoming message from the other user
             if (String(newData.sender_id) !== String(currentUserId)) {
               translateIncomingMessage(newData, targetLanguage, currentUserId);
             }
@@ -196,8 +197,9 @@ export default function ChatPage() {
           }
         }
       )
-      .subscribe();
+      .subscribe(); //Physical connection engine starts listening 
 
+      // Tears the TCP socket channel after leaving the chat
     return () => {
       supabase.removeChannel(channel);
     };
@@ -249,12 +251,13 @@ export default function ChatPage() {
     }
   };
 
+  // FIXED: Changed router.push to window.location.href to fully clear the Next.js cache tracking route data
   const confirmDelete = async () => {
     if (!activeChatId) return;
     const { error } = await supabase.from('chats').delete().eq('id', activeChatId);
     if (!error) { 
       toast.success("Contact removed"); 
-      router.push('/dashboard'); 
+      window.location.href = '/dashboard'; 
     }
   };
 
